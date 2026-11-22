@@ -152,28 +152,72 @@ ls -- -a       # argv: -a -- -a   (the second -a is a filename)
 A shell alias or function named `ls` already owns that name. In that case,
 try this recipe in a fresh `zsh -f` session with the plugin sourced manually.
 
-### Explicit option values
+### AWS CLI: default to a work profile and pick an alternative
 
-A tool accepts both `--format` and `-f`. Apply a default only for `report list`
-and only when all declared spellings are absent.
+Save this as `aws.yaml` in your manifest directory and run `shell-overrides reload`.
+Use the names of profiles you already have configured in the AWS CLI.
 
 ```yaml
 version: 1
 commands:
-  report:
-    - prefix: [list]
+  aws:
+    - prefix: []
       defaults:
-        - append: [--format, table]
-          names: [--format, -f]
-          forms: [separate, equals, attached]
+        - append: [--profile=work-read-dev]
+          names: [--profile]
+          forms: [equals, separate]
+tokens:
+  PROFILE_DEV: work-read-dev
+  PROFILE_STAGE: work-read-stage
+  PROFILE_PROD: work-read-prod
 ```
 
 ```zsh
-report list                   # argv: list --format table
-report list -fjson            # argv: list -fjson
-report list --format=false    # argv: list --format=false
-report list --format ''       # argv: list --format <empty string>
+aws sts get-caller-identity                          # adds --profile=work-read-dev
+aws s3 ls --profile=work-read-stage                  # keeps the explicit profile
+aws --profile work-read-prod sts get-caller-identity # also recognizes the two-argument form
 ```
+
+With token-completion loaded, type `aws s3 ls --profile=$PROFILE_` and press
+**Tab**. Pick `PROFILE_STAGE` from `aws.yaml`. The editable line now
+contains the quoted literal `work-read-stage` after `--profile=`. When you
+run it, the wrapper sees the explicit option and leaves it alone.
+
+The shared `PROFILE_` prefix gives you an enum-like menu of familiar values.
+You can still type any configured profile. The tokens are picker entries;
+they do not create shell variables or configure credentials.
+
+### kubectl: default a namespace for reads
+
+Save this as `kube.yaml` alongside the AWS manifest and reload. The rule
+only matches commands starting with `kubectl get`. Asking for all namespaces
+skips it entirely.
+
+```yaml
+version: 1
+commands:
+  kubectl:
+    - prefix: [get]
+      exclude:
+        - names: [--all-namespaces, -A]
+          forms: [bare, equals]
+      defaults:
+        - append: [--namespace=payments-dev]
+          names: [--namespace, -n]
+          forms: [equals, separate, attached]
+tokens:
+  NS_DEV: payments-dev
+  NS_STAGE: payments-stage
+```
+
+```zsh
+kubectl get pods                  # adds --namespace=payments-dev
+kubectl get pods -n payments-stage # keeps the explicit namespace
+kubectl get deployments -A        # lists across namespaces
+```
+
+Type `kubectl get pods --namespace=$NS_` and press **Tab** to choose a
+namespace by name. Other subcommands keep their usual behavior.
 
 ### Exclude a rule and fall through
 
