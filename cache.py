@@ -53,6 +53,16 @@ def option(spec, default):
     return [len(append), *append, len(names), *names, len(forms), *forms]
 
 
+def markerless(spec):
+    if "markerless" not in spec:
+        return "off"
+    settings = spec["markerless"]
+    fields(settings, ["empty"])
+    empty = string(settings["empty"])
+    require(empty in {"all", "native"}, "markerless.empty must be all or native")
+    return empty
+
+
 def completion(spec):
     fields(spec, ["option", "position", "forms", "markerless", "deferred", "source"])
     require(("option" in spec) != ("position" in spec), "choose one of option or position")
@@ -66,12 +76,7 @@ def completion(spec):
         require(type(position) is int and position >= 1, "position must be a positive integer")
         require("forms" not in spec, "forms applies only to an option")
         selector, forms = f"@{position}", ["positional"]
-    empty = "off"
-    if "markerless" in spec:
-        settings = spec["markerless"]
-        fields(settings, ["empty"])
-        empty = string(settings["empty"])
-        require(empty in {"all", "native"}, "markerless.empty must be all or native")
+    empty = markerless(spec)
     deferred = spec.get("deferred", {})
     fields(deferred, ["guard", "preserve_trailing_newlines"])
     require(all(type(value) is bool for value in deferred.values()), "deferred settings must be booleans")
@@ -106,9 +111,21 @@ def compile_yaml(raw):
     fields(doc, ["version", "commands", "tokens"])
     require(type(doc.get("version")) is int and doc["version"] == 1, "expected version 1")
     commands = {}
+    navigations = {}
     sources = []
     for name, rules in mapping(doc.get("commands", {})):
         require(re.fullmatch(COMMAND, string(name)), "invalid command name")
+        if isinstance(rules, dict):
+            fields(rules, ["navigate"])
+            nav = rules["navigate"]
+            fields(nav, ["root", "env", "markerless"])
+            root = string(nav["root"])
+            require(root, "navigate.root must be a nonempty path")
+            env = string(nav["env"]) if "env" in nav else ""
+            require("env" not in nav or re.fullmatch(NAME, env), "navigate.env must be a shell identifier")
+            commands[name] = [0]
+            navigations[name] = [root, env, markerless(nav)]
+            continue
         require(isinstance(rules, list) and rules, "expected nonempty rule list")
         data = [len(rules)]
         for index, rule in enumerate(rules):
@@ -131,7 +148,7 @@ def compile_yaml(raw):
     for key, value in mapping(doc.get("tokens", {})):
         require(re.fullmatch(NAME, string(key)), "invalid token name")
         tokens[key] = string(value)
-    return dict(commands=commands, tokens=tokens, sources=sources)
+    return dict(commands=commands, tokens=tokens, sources=sources, navigations=navigations)
 
 
 def publish(target, content):
@@ -149,6 +166,8 @@ def records_for(files):
     for filename, entry in files.items():
         for name, data in entry["commands"].items():
             records.extend(["command", name, len(data), *data])
+        for name, navigation in entry["navigations"].items():
+            records.extend(["navigate", name, *navigation])
         for source in entry["sources"]:
             records.extend(["source", *source])
         for key, value in entry["tokens"].items():
@@ -214,7 +233,7 @@ def remove_conflicts(files, previous, config, diagnostics):
 def snapshot(config, sources, records):
     # Byte lengths let UTF-16 sources contain arbitrary NULs. Rule records
     # have a separate, NUL-free string contract suitable for zsh argv.
-    parts = [b"SO/6\0", os.fsencode(config), b"\0"]
+    parts = [b"SO/7\0", os.fsencode(config), b"\0"]
     for name, raw in sources:
         parts.extend([os.fsencode(name), b"\0", str(len(raw)).encode(), b"\0", raw])
     # POSIX cksum is available in source installs on macOS and Linux.
