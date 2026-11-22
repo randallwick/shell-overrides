@@ -395,6 +395,8 @@ Every entry below belongs under `commands.<name>[].completions[]`.
 | `option` | Flag name, exclusive with `position` | The exact option spelling. Add another entry for an alias. |
 | `position` | Positive integer, exclusive with `option` | Absolute argument slot, starting at 1 after the command. Earlier options, their values, and `--` each occupy a slot. Redirections are excluded. |
 | `markerless.empty` | Optional mapping `markerless: {empty: all}` or `{empty: native}` | Enable literal completion for typed fragments. For an empty fragment, `all` offers root choices and `native` delegates to zsh. Omit the mapping for marked tokens only. |
+| `deferred.guard` | Boolean, defaults to `false` | On execution, require the original command, selector, source and policy to match a current manifest declaration. |
+| `deferred.preserve_trailing_newlines` | Boolean, defaults to `false` | Preserve trailing newlines when executing a deferred lookup. The default uses ordinary quoted command substitution. |
 | `forms` | Options only, defaults to `[separate, equals]` | Enable `--option $fragment`, `--option=$fragment`, or both. |
 | `source.format` | Optional string, defaults to `auto` | Token-completion infers the format from enabled file providers. Set `ini`, `toml`, `json` or `yaml` to select a specific enabled provider. |
 | `source.file` | Required path string | Absolute paths and leading `~` are supported. Relative paths resolve from the working directory at completion and execution. |
@@ -417,23 +419,40 @@ component takes precedence. A dot separates levels, and zero-based indices
 select array elements. Literal dots, spaces and other shell-sensitive key
 characters are percent-encoded in the path: `deploy.us%2Eeast` identifies
 the single key `us.east` inside `deploy`. Lookup uses exact, case-sensitive
-keys. Supported mapping keys are nonempty strings without NUL; scalar strings
-preserve whitespace, including trailing newlines. Booleans and null use JSON
+keys. Supported mapping keys are nonempty strings without NUL. Booleans and null use JSON
 spelling, and date/time scalars use ISO format.
 
 Shell-overrides selects the source declaration for the current command, rule
 and option or position. Token-completion reads that file and presents candidates.
 For an unmarked argument, branches continue the editable path and selecting a
 leaf inserts its shell-quoted literal. The selected value can appear in shell
-history. For a marked argument, token-completion inserts its deferred lookup. When the line executes, token-completion asks the loaded
-shell-overrides provider whether the command, option, format, selection policy
-and file still match a current declaration. History records both the declared
-mode and the parser actually selected. Switching from inferred to explicit
-format or vice versa requires completing the argument again. A scoped source
-requires its format provider to be enabled in token-completion, including
-when `source.format` explicitly names it. Removing the declaration and
-running `shell-overrides reload` revokes it, including for saved history
-entries. An invalid manifest edit retains the last valid declaration.
+history. For a marked argument, token-completion inserts a quoted lookup
+using the selected parser, file, selection policy and path. When the command
+runs, it reads the file again. By default, zsh trims trailing newlines from
+the result. The saved lookup requires the selected parser to remain enabled
+and continues to work after the manifest declaration is removed.
+
+When a policy must remain active for history replay, enable `guard`. For a
+multiline scalar whose trailing newlines are significant, enable
+`preserve_trailing_newlines`. Set either independently, or use both on one
+completion entry:
+
+```yaml
+- option: --message
+  source: {format: json, file: ./messages.json, select: leaf-values}
+  deferred:
+    guard: true
+    preserve_trailing_newlines: true
+```
+
+Guarded history records the command, selector, declared and selected formats,
+selection policy and file. Removing its declaration or changing from inferred
+to explicit format revokes that lookup after `shell-overrides reload`.
+An invalid manifest edit retains the last valid declaration. Previously
+generated guarded commands keep checking their declaration, including those
+saved before `deferred.guard` became optional. Turning off `guard` affects new
+insertions. Markerless selection always checks its declaration and preserves
+the exact value.
 
 If a selected literal disappears or its guard denies access while the picker
 is open, the original command stays editable. If a deferred lookup fails when

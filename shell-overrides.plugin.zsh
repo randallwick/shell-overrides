@@ -110,7 +110,7 @@ _so_warm_records() {
 
   # Under the C locale, lengths and slices count bytes. A length-framed
   # manifest can include BOMs, NULs, and trailing newlines.
-  prefix="SO/5${nul}${config}${nul}"
+  prefix="SO/6${nul}${config}${nul}"
   for file in "$config"/*.y(a|)ml(N-.); do
     [[ -r $file ]] || return 1
     raw=${mapfile[$file]}
@@ -175,11 +175,11 @@ _so_reload() {
         pos=end+1
         ;;
       source)
-        _so_sources+=("${(@)records[pos,pos+7]}")
+        _so_sources+=("${(@)records[pos,pos+9]}")
         if [[ " ${records[pos+3]} " == *' separate '* ]]; then
           _so_source_separate[${records[pos]}/${records[pos+1]}/${records[pos+2]}]=1
         fi
-        (( pos += 8 ))
+        (( pos += 10 ))
         ;;
       token)
         _so_token_files+=("${records[pos++]}")
@@ -234,13 +234,14 @@ token_provider_shell_overrides_argument_context() {
   else
     [[ $form == (separate|equals) && $_so_option_position == 1 ]] || return 0
   fi
+  local -a request
   local helper=token_completion_file guard=token_provider_shell_overrides_authorize
   if [[ $mode == literal ]]; then
     helper+=_literal
     guard+=_literal
   fi
   local -i i
-  for ((i=1; i<=$#_so_sources; i+=8)); do
+  for ((i=1; i<=$#_so_sources; i+=10)); do
     [[ ${_so_sources[i]} == "$cmd" && ${_so_sources[i+1]} == "$_so_rule" &&
        ${_so_sources[i+2]} == "$selector" && " ${_so_sources[i+3]} " == *" $form "* ]] || continue
     token_completion_scope
@@ -248,12 +249,19 @@ token_provider_shell_overrides_argument_context() {
       [[ ${_so_sources[i+7]} != off && ( -n $fragment || ${_so_sources[i+7]} == all ) ]] || continue
     fi
     (( ${+functions[$helper]} )) || continue
-    "$helper" "$fragment" "${_so_sources[i+4]}" "${_so_sources[i+5]}" "${_so_sources[i+6]}" \
-      "$guard" "$cmd" "$selector" "${_so_sources[i+4]}"
+    request=("$fragment" "${_so_sources[i+4]}" "${_so_sources[i+5]}" "${_so_sources[i+6]}")
+    if [[ $mode == literal || ${_so_sources[i+8]} == 1 ]]; then
+      request+=("$guard" "$cmd" "$selector" "${_so_sources[i+4]}")
+    fi
+    if [[ $mode == token && ${_so_sources[i+9]} == 1 ]]; then
+      request=(--exact "${request[@]}")
+    fi
+    "$helper" "${request[@]}"
   done
 }
 
-# Check the original declaration again when a user accepts or replays a result.
+# Already-generated guarded history still checks its original declaration, even
+# if newly completed values would use the unguarded default.
 token_provider_shell_overrides_authorize() {
   _so_authorize token "$@"
 }
@@ -277,7 +285,7 @@ _so_authorize() {
   [[ $declared == auto || $declared == "$resolved" ]] || return 1
   [[ $policy != section-names || $resolved == ini ]] || return 1
   local -i i
-  for ((i=1; i<=$#_so_sources; i+=8)); do
+  for ((i=1; i<=$#_so_sources; i+=10)); do
     if [[ ${_so_sources[i]} == "$cmd" && ${_so_sources[i+2]} == "$opt" &&
           ${_so_sources[i+4]} == "$declared" && ${_so_sources[i+5]} == "$policy" &&
           ${_so_sources[i+6]} == "$file" && ( $mode == token || ${_so_sources[i+7]} != off ) ]]; then

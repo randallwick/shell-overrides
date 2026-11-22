@@ -54,13 +54,19 @@ token_completion_scope() { claimed=1; }
 token_completion_file() {
   # Mirror the public helper/guard calling convention, without loading a
   # parser or reading the source document in this plugin's test suite.
-  [[ $claimed == 1 && $# == 8 && $2 == "$8" ]] || exit 91
+  [[ $claimed == 1 ]] || exit 91
+  printf '%s\\0' "$@"
+  claimed=0
+  if (( $# == 5 || $# == 9 )); then
+    [[ $1 == --exact ]] || exit 91
+    shift
+  fi
+  (( $# == 4 )) && return 0
+  [[ $# == 8 && $2 == "$8" ]] || exit 91
   local resolved=$2
   # Our fixture decoder selects INI for the extensionless accounts source.
   [[ $resolved == auto ]] && resolved=ini
   "$5" "$6" "$7" "$8" "$resolved" "$3" "$4" || exit 92
-  printf '%s\\0' "$@"
-  claimed=0
 }
 token_completion_file_literal() { token_completion_file "$@"; }
 """
@@ -80,7 +86,7 @@ token_completion_file_literal() { token_completion_file "$@"; }
             self.fields(
                 self.shell("token_provider_shell_overrides_context wo probe --profile separate read")
             ),
-            ["wo", "auto", "section-names", "~/accounts", GUARD, "probe", "--profile", "auto"],
+            ["wo", "auto", "section-names", "~/accounts"],
         )
         for context in [
             "wo other --profile equals read",
@@ -99,18 +105,10 @@ token_completion_file_literal() { token_completion_file "$@"; }
                 "json",
                 "leaf-values",
                 "./settings.json",
-                GUARD,
-                "probe",
-                "--value",
-                "json",
                 "re",
                 "yaml",
                 "leaf-values",
                 "./other.yaml",
-                GUARD,
-                "probe",
-                "--value",
-                "yaml",
             ],
         )
 
@@ -132,7 +130,7 @@ token_completion_file_literal() { token_completion_file "$@"; }
                 # A completed option/value pair leaves the next word eligible.
                 # A flag-shaped value, itself known as a flag, remains a value.
                 for prefix in ("--label name", "--label --profile", "--profile --label"):
-                    self.assertEqual(self.fields(self.shell(probe + " " + prefix))[::8], ["wo"])
+                    self.assertEqual(self.fields(self.shell(probe + " " + prefix))[::4], ["wo"])
 
     def test_markerless_and_physical_positions(self):
         self.manifest.write_text(
@@ -159,7 +157,10 @@ token_completion_file_literal() { token_completion_file "$@"; }
         ]:
             with self.subTest(arguments):
                 row = self.fields(self.shell(hook + arguments))
-                self.assertEqual(row[4:7], [GUARD + ("_literal" if literal else ""), "probe", selector])
+                if literal:
+                    self.assertEqual(row[4:7], [GUARD + "_literal", "probe", selector])
+                else:
+                    self.assertEqual(row, ["", "json", "keys", "./settings.json"])
         for arguments, claim in [
             ("literal '' probe '' positional read", 1),
             ("literal wo probe --value equals read", 1),
@@ -207,6 +208,55 @@ shell-overrides reload
         ):
             with self.subTest(selector):
                 self.manifest.write_text(original.replace("option: --profile", selector))
+                run = self.shell("token_provider_shell_overrides_context wo probe --profile equals read")
+                self.assertEqual(self.fields(run), [])
+                self.assertIn(b"cli.yaml", run.stderr)
+
+    def test_deferred_settings_compose_and_leave_literal_guards_intact(self):
+        original = self.manifest.read_text().replace(
+            "        - option: --profile",
+            "        - option: --profile\n          markerless: {empty: all}",
+        )
+        hook = "token_provider_shell_overrides_argument_context"
+        standard = ["wo", "auto", "section-names", "~/accounts"]
+        identity = ["probe", "--profile", "auto"]
+        for options, guarded, exact in [
+            ("{}", False, False),
+            ("{guard: false, preserve_trailing_newlines: false}", False, False),
+            ("{guard: true}", True, False),
+            ("{preserve_trailing_newlines: true}", False, True),
+            ("{guard: true, preserve_trailing_newlines: true}", True, True),
+        ]:
+            with self.subTest(options):
+                self.manifest.write_text(
+                    original.replace(
+                        "          markerless: {empty: all}",
+                        "          markerless: {empty: all}\n          deferred: " + options,
+                    )
+                )
+                token = self.fields(self.shell(f"{hook} token wo probe --profile equals read"))
+                expected = (["--exact"] if exact else []) + standard
+                self.assertEqual(token, expected + ([GUARD, *identity] if guarded else []))
+                literal = self.fields(self.shell(f"{hook} literal wo probe --profile equals read"))
+                self.assertEqual(literal, standard + [GUARD + "_literal", *identity])
+
+    def test_deferred_settings_require_a_mapping_of_known_booleans(self):
+        original = self.manifest.read_text()
+        for value in (
+            "null",
+            "true",
+            "{guard: 1}",
+            "{guard: 'false'}",
+            "{preserve_trailing_newlines: null}",
+            "{exact: true}",
+        ):
+            with self.subTest(value):
+                self.manifest.write_text(
+                    original.replace(
+                        "        - option: --profile",
+                        "        - option: --profile\n          deferred: " + value,
+                    )
+                )
                 run = self.shell("token_provider_shell_overrides_context wo probe --profile equals read")
                 self.assertEqual(self.fields(run), [])
                 self.assertIn(b"cli.yaml", run.stderr)

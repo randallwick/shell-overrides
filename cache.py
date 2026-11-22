@@ -54,7 +54,7 @@ def option(spec, default):
 
 
 def completion(spec):
-    fields(spec, ["option", "position", "forms", "markerless", "source"])
+    fields(spec, ["option", "position", "forms", "markerless", "deferred", "source"])
     require(("option" in spec) != ("position" in spec), "choose one of option or position")
     if "option" in spec:
         selector = string(spec["option"])
@@ -72,6 +72,11 @@ def completion(spec):
         fields(settings, ["empty"])
         empty = string(settings["empty"])
         require(empty in {"all", "native"}, "markerless.empty must be all or native")
+    deferred = spec.get("deferred", {})
+    fields(deferred, ["guard", "preserve_trailing_newlines"])
+    require(all(type(value) is bool for value in deferred.values()), "deferred settings must be booleans")
+    guarded = int(deferred.get("guard", False))
+    exact = int(deferred.get("preserve_trailing_newlines", False))
     src = spec["source"]
     fields(src, ["format", "file", "select"])
     fmt = string(src.get("format", "auto"))
@@ -79,7 +84,7 @@ def completion(spec):
     require(fmt in {"auto", "ini", "toml", "json", "yaml"} and file, "expected a format and file")
     require(select in {"keys", "leaf-values"} or (fmt in {"auto", "ini"} and select == "section-names"),
             "expected keys, leaf-values, or INI section-names")
-    return [selector, " ".join(forms), fmt, select, file, empty]
+    return [selector, " ".join(forms), fmt, select, file, empty, guarded, exact]
 
 
 def compile_yaml(raw):
@@ -209,7 +214,7 @@ def remove_conflicts(files, previous, config, diagnostics):
 def snapshot(config, sources, records):
     # Byte lengths let UTF-16 sources contain arbitrary NULs. Rule records
     # have a separate, NUL-free string contract suitable for zsh argv.
-    parts = [b"SO/5\0", os.fsencode(config), b"\0"]
+    parts = [b"SO/6\0", os.fsencode(config), b"\0"]
     for name, raw in sources:
         parts.extend([os.fsencode(name), b"\0", str(len(raw)).encode(), b"\0", raw])
     # POSIX cksum is available in source installs on macOS and Linux.
