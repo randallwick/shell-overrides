@@ -1,6 +1,6 @@
 typeset -g _so_root=${${(%):-%x}:A:h}
-typeset -ga _so_data _so_token_files _so_token_keys _so_token_values _so_wrapped
-typeset -gA _so_start
+typeset -ga _so_data _so_token_files _so_token_keys _so_token_values _so_wrapped _so_sources
+typeset -gA _so_start _so_source_separate
 
 _so_prepare_argv() {
   emulate -L zsh
@@ -8,7 +8,7 @@ _so_prepare_argv() {
   shift
   # A command block contains ordered rules, each followed by its flag groups.
   local -i pos=${_so_start[$target]} count=_so_data[pos++] r n e d i j k limit matched
-  local -i spec appends names forms
+  local -i spec appends names forms option_position takes_value
   local mode flag form arg groups
   local -a additions starts seen
   local -A bare separate equals attached
@@ -47,15 +47,23 @@ _so_prepare_argv() {
     done
     (( matched )) || continue
     limit=$#
+    option_position=1
     for ((i=1; i<=$#; i++)); do
       arg=${argv[i]}
       if [[ $arg == -- ]]; then
         limit=i-1
+        option_position=2
         break
       fi
       [[ $arg == -* ]] || continue
       groups=${bare[$arg]}
-      if [[ -n ${separate[$arg]} && i -lt $# && ${argv[i+1]} != -- ]]; then
+      takes_value=$(( ${+separate[$arg]} || ${+_so_source_separate[$target/$r/$arg]} ))
+      if (( takes_value && i == $# )); then
+        # Completion passes the argv prefix preceding its active option.
+        # That next word would actually be this option's value.
+        option_position=0
+      fi
+      if (( takes_value && i < $# )) && [[ ${argv[i+1]} != -- ]]; then
         groups+=${separate[$arg]}
         (( i++ ))
       else
@@ -76,6 +84,8 @@ _so_prepare_argv() {
       [[ -n ${seen[i]} ]] && matched=0
     done
     (( matched )) || continue
+    _so_rule=$r
+    _so_option_position=$option_position
     for ((i=e+1; i<=e+d; i++)); do
       [[ -n ${seen[i]} ]] && continue
       k=starts[i]
@@ -100,7 +110,7 @@ _so_warm_records() {
 
   # Under the C locale, lengths and slices count bytes. A length-framed
   # manifest can include BOMs, NULs, and trailing newlines.
-  prefix="SO/2${nul}${config}${nul}"
+  prefix="SO/6${nul}${config}${nul}"
   for file in "$config"/*.y(a|)ml(N-.); do
     [[ -r $file ]] || return 1
     raw=${mapfile[$file]}
@@ -144,6 +154,7 @@ _so_reload() {
   for name in "${_so_wrapped[@]}"; do
     [[ ${functions[$name]} == ${functions[_so_wrapper]} ]] && unfunction "$name"
   done
+  _so_sources=() _so_source_separate=()
   _so_data=() _so_wrapped=() _so_start=()
   _so_token_files=() _so_token_keys=() _so_token_values=()
   while ((pos < $#records)); do
@@ -163,6 +174,13 @@ _so_reload() {
         fi
         pos=end+1
         ;;
+      source)
+        _so_sources+=("${(@)records[pos,pos+9]}")
+        if [[ " ${records[pos+3]} " == *' separate '* ]]; then
+          _so_source_separate[${records[pos]}/${records[pos+1]}/${records[pos+2]}]=1
+        fi
+        (( pos += 10 ))
+        ;;
       token)
         _so_token_files+=("${records[pos++]}")
         _so_token_keys+=("${records[pos++]}")
@@ -177,6 +195,7 @@ _so_wrapper() {
     command "${funcstack[1]}" "$@"
     return $?
   fi
+  local _so_rule _so_option_position
   local -a _so_argv=("$@")
   _so_prepare_argv "${funcstack[1]}" "$@"
   # Run outside the preparation scope so its local names cannot mask the
@@ -191,6 +210,89 @@ token_provider_shell_overrides_query() {
   for ((i=1; i<=$#_so_token_keys; i++)); do
     token_completion_emit "${_so_token_keys[i]}" "${_so_token_files[i]}" "${(qqqq)_so_token_values[i]}"
   done
+}
+
+# Older token-completion versions only ask about marked option values.
+token_provider_shell_overrides_context() {
+  token_provider_shell_overrides_argument_context token "$@"
+}
+
+token_provider_shell_overrides_argument_context() {
+  emulate -L zsh
+  (( $# >= 5 )) || return 0
+  local mode=$1 fragment=$2 cmd=$3 selector=$4 form=$5
+  shift 5
+  [[ -n $cmd && $mode == (literal|token) ]] || return 0
+  (( ${+functions[token_completion_scope]} && ${+_so_start[$cmd]} && $#_so_sources )) || return 0
+  local _so_rule=-1 _so_option_position=0
+  local -a _so_argv
+  _so_prepare_argv "$cmd" "$@"
+  if [[ $form == positional && -z $selector ]]; then
+    (( _so_option_position )) || return 0
+    [[ $mode == literal && $fragment == -* && $_so_option_position == 1 ]] && return 0
+    selector="@$(( $# + 1 ))"
+  else
+    [[ $form == (separate|equals) && $_so_option_position == 1 ]] || return 0
+  fi
+  local -a request
+  local helper=token_completion_file guard=token_provider_shell_overrides_authorize
+  if [[ $mode == literal ]]; then
+    helper+=_literal
+    guard+=_literal
+  fi
+  local -i i
+  for ((i=1; i<=$#_so_sources; i+=10)); do
+    [[ ${_so_sources[i]} == "$cmd" && ${_so_sources[i+1]} == "$_so_rule" &&
+       ${_so_sources[i+2]} == "$selector" && " ${_so_sources[i+3]} " == *" $form "* ]] || continue
+    token_completion_scope
+    if [[ $mode == literal ]]; then
+      [[ ${_so_sources[i+7]} != off && ( -n $fragment || ${_so_sources[i+7]} == all ) ]] || continue
+    fi
+    (( ${+functions[$helper]} )) || continue
+    request=("$fragment" "${_so_sources[i+4]}" "${_so_sources[i+5]}" "${_so_sources[i+6]}")
+    if [[ $mode == literal || ${_so_sources[i+8]} == 1 ]]; then
+      request+=("$guard" "$cmd" "$selector" "${_so_sources[i+4]}")
+    fi
+    if [[ $mode == token && ${_so_sources[i+9]} == 1 ]]; then
+      request=(--exact "${request[@]}")
+    fi
+    "$helper" "${request[@]}"
+  done
+}
+
+# Already-generated guarded history still checks its original declaration, even
+# if newly completed values would use the unguarded default.
+token_provider_shell_overrides_authorize() {
+  _so_authorize token "$@"
+}
+
+token_provider_shell_overrides_authorize_literal() {
+  _so_authorize literal "$@"
+}
+
+_so_authorize() {
+  emulate -L zsh
+  local mode=$1
+  shift
+  # Pre-inference history carried only the explicit format. Normalize it to
+  # the new (declared, resolved) pair without permitting an auto declaration.
+  if (( $# == 5 )); then
+    set -- "$1" "$2" "$3" "$3" "$4" "$5"
+  fi
+  (( $# == 6 )) || return 1
+  local cmd=$1 opt=$2 declared=$3 resolved=$4 policy=$5 file=$6
+  [[ $resolved == (ini|toml|json|yaml) ]] || return 1
+  [[ $declared == auto || $declared == "$resolved" ]] || return 1
+  [[ $policy != section-names || $resolved == ini ]] || return 1
+  local -i i
+  for ((i=1; i<=$#_so_sources; i+=10)); do
+    if [[ ${_so_sources[i]} == "$cmd" && ${_so_sources[i+2]} == "$opt" &&
+          ${_so_sources[i+4]} == "$declared" && ${_so_sources[i+5]} == "$policy" &&
+          ${_so_sources[i+6]} == "$file" && ( $mode == token || ${_so_sources[i+7]} != off ) ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 shell-overrides() {

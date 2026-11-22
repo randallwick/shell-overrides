@@ -53,6 +53,40 @@ def option(spec, default):
     return [len(append), *append, len(names), *names, len(forms), *forms]
 
 
+def completion(spec):
+    fields(spec, ["option", "position", "forms", "markerless", "deferred", "source"])
+    require(("option" in spec) != ("position" in spec), "choose one of option or position")
+    if "option" in spec:
+        selector = string(spec["option"])
+        require(re.fullmatch(FLAG, selector), "invalid completion option")
+        forms = strings(spec.get("forms", ["separate", "equals"]))
+        require(forms and set(forms) <= {"separate", "equals"}, "unknown completion form")
+    else:
+        position = spec["position"]
+        require(type(position) is int and position >= 1, "position must be a positive integer")
+        require("forms" not in spec, "forms applies only to an option")
+        selector, forms = f"@{position}", ["positional"]
+    empty = "off"
+    if "markerless" in spec:
+        settings = spec["markerless"]
+        fields(settings, ["empty"])
+        empty = string(settings["empty"])
+        require(empty in {"all", "native"}, "markerless.empty must be all or native")
+    deferred = spec.get("deferred", {})
+    fields(deferred, ["guard", "preserve_trailing_newlines"])
+    require(all(type(value) is bool for value in deferred.values()), "deferred settings must be booleans")
+    guarded = int(deferred.get("guard", False))
+    exact = int(deferred.get("preserve_trailing_newlines", False))
+    src = spec["source"]
+    fields(src, ["format", "file", "select"])
+    fmt = string(src.get("format", "auto"))
+    file, select = string(src["file"]), string(src["select"])
+    require(fmt in {"auto", "ini", "toml", "json", "yaml"} and file, "expected a format and file")
+    require(select in {"keys", "leaf-values"} or (fmt in {"auto", "ini"} and select == "section-names"),
+            "expected keys, leaf-values, or INI section-names")
+    return [selector, " ".join(forms), fmt, select, file, empty, guarded, exact]
+
+
 def compile_yaml(raw):
     try:
         import yaml
@@ -72,18 +106,21 @@ def compile_yaml(raw):
     fields(doc, ["version", "commands", "tokens"])
     require(type(doc.get("version")) is int and doc["version"] == 1, "expected version 1")
     commands = {}
+    sources = []
     for name, rules in mapping(doc.get("commands", {})):
         require(re.fullmatch(COMMAND, string(name)), "invalid command name")
         require(isinstance(rules, list) and rules, "expected nonempty rule list")
         data = [len(rules)]
-        for rule in rules:
-            fields(rule, ["prefix", "exact", "exclude", "defaults"])
+        for index, rule in enumerate(rules):
+            fields(rule, ["prefix", "exact", "exclude", "defaults", "completions"])
             require(("exact" in rule) != ("prefix" in rule), "choose exact or prefix")
             mode = "exact" if "exact" in rule else "prefix"
             args = strings(rule[mode])
-            excludes, defaults = rule.get("exclude", []), rule["defaults"]
-            require(isinstance(excludes, list) and isinstance(defaults, list) and defaults,
-                    "expected exclude and nonempty defaults lists")
+            excludes, defaults = rule.get("exclude", []), rule.get("defaults", [])
+            completions = rule.get("completions", [])
+            require(all(isinstance(group, list) for group in (defaults, excludes, completions))
+                    and (defaults or completions), "expected defaults or completions")
+            sources.extend([name, index, *completion(spec)] for spec in completions)
             data.extend([mode, len(args), *args, len(excludes), len(defaults)])
             for spec in excludes:
                 data.extend(option(spec, False))
@@ -94,7 +131,7 @@ def compile_yaml(raw):
     for key, value in mapping(doc.get("tokens", {})):
         require(re.fullmatch(NAME, string(key)), "invalid token name")
         tokens[key] = string(value)
-    return dict(commands=commands, tokens=tokens)
+    return dict(commands=commands, tokens=tokens, sources=sources)
 
 
 def publish(target, content):
@@ -112,6 +149,8 @@ def records_for(files):
     for filename, entry in files.items():
         for name, data in entry["commands"].items():
             records.extend(["command", name, len(data), *data])
+        for source in entry["sources"]:
+            records.extend(["source", *source])
         for key, value in entry["tokens"].items():
             records.extend(["token", filename, key, value])
     return records
@@ -175,7 +214,7 @@ def remove_conflicts(files, previous, config, diagnostics):
 def snapshot(config, sources, records):
     # Byte lengths let UTF-16 sources contain arbitrary NULs. Rule records
     # have a separate, NUL-free string contract suitable for zsh argv.
-    parts = [b"SO/2\0", os.fsencode(config), b"\0"]
+    parts = [b"SO/6\0", os.fsencode(config), b"\0"]
     for name, raw in sources:
         parts.extend([os.fsencode(name), b"\0", str(len(raw)).encode(), b"\0", raw])
     # POSIX cksum is available in source installs on macOS and Linux.

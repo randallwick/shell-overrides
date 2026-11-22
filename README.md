@@ -152,28 +152,154 @@ ls -- -a       # argv: -a -- -a   (the second -a is a filename)
 A shell alias or function named `ls` already owns that name. In that case,
 try this recipe in a fresh `zsh -f` session with the plugin sourced manually.
 
-### Explicit option values
+### AWS CLI: default to a work profile and pick an alternative
 
-A tool accepts both `--format` and `-f`. Apply a default only for `report list`
-and only when all declared spellings are absent.
+Save this as `aws.yaml` in your manifest directory and run `shell-overrides reload`.
+Use the names of profiles you already have configured in the AWS CLI.
 
 ```yaml
 version: 1
 commands:
-  report:
-    - prefix: [list]
+  aws:
+    - prefix: []
       defaults:
-        - append: [--format, table]
-          names: [--format, -f]
-          forms: [separate, equals, attached]
+        - append: [--profile=work-read-dev]
+          names: [--profile]
+          forms: [equals, separate]
+tokens:
+  PROFILE_DEV: work-read-dev
+  PROFILE_STAGE: work-read-stage
+  PROFILE_PROD: work-read-prod
 ```
 
 ```zsh
-report list                   # argv: list --format table
-report list -fjson            # argv: list -fjson
-report list --format=false    # argv: list --format=false
-report list --format ''       # argv: list --format <empty string>
+aws sts get-caller-identity                          # adds --profile=work-read-dev
+aws s3 ls --profile=work-read-stage                  # keeps the explicit profile
+aws --profile work-read-prod sts get-caller-identity # also recognizes the two-argument form
 ```
+
+With token-completion loaded, type `aws s3 ls --profile=$PROFILE_` and press
+**Tab**. Pick `PROFILE_STAGE` from `aws.yaml`. The editable line now
+contains the quoted literal `work-read-stage` after `--profile=`. When you
+run it, the wrapper sees the explicit option and leaves it alone.
+
+The shared `PROFILE_` prefix gives you an enum-like menu of familiar values.
+You can still type any configured profile. The tokens are picker entries;
+they do not create shell variables or configure credentials.
+
+### Discover AWS profiles from an INI file
+
+As an alternative to maintaining the static profile tokens above, replace the
+AWS rule with this one. Save it in your manifest directory and run
+`shell-overrides reload`. Load [token-completion](https://github.com/randallwick/token-completion)
+with format inference support. For an explicit provider list, include both
+`shell_overrides` and `ini`, for example `TOKEN_COMPLETION_PROVIDERS=(shell dotenv shell_overrides ini)`.
+
+```yaml
+version: 1
+commands:
+  aws:
+    - prefix: []
+      defaults:
+        - append: [--profile=work-read-dev]
+          names: [--profile]
+          forms: [equals, separate]
+      completions:
+        - option: --profile
+          forms: [equals, separate]
+          markerless: {empty: all}
+          source:
+            file: ~/.aws/credentials
+            select: section-names
+```
+
+With sections `[work-read-dev]` and `[work-read-stage]`, type
+`aws s3 ls --profile=$wo` or `aws s3 ls --profile $wo` and press **Tab**.
+The picker shows the two section names. Choose the staging profile, and the
+editable line contains token-completion’s quoted file lookup expression. AWS
+receives one explicit profile value, `work-read-stage`. Credential option
+names and values never appear as candidates, and the generated lookup can
+only return a section name. Omitting `--profile` still supplies the default.
+For a literal profile, type `aws s3 ls --profile ` and press **Tab**, or
+start with `--profile=wo` to narrow the list. The selected name is quoted on
+the command line and stored in history. The `markerless` entry enables this
+shortcut. Remove it to keep ordinary zsh completion for unmarked arguments.
+
+### Walk a project settings file one component at a time
+
+For a CLI called `deploy`, save the following manifest and reload:
+
+```yaml
+version: 1
+commands:
+  deploy:
+    - prefix: [show]
+      completions:
+        - option: --region
+          source: {format: json, file: ./settings.json, select: leaf-values}
+```
+
+Given this `settings.json`:
+
+```json
+{"deployment": {"region": "us-east-1"}, "dependencies": {"registry": "local"}}
+```
+
+Type `deploy show --region=$de.re` and press **Tab**. Both first components
+match. Choosing `deployment.` expands the token to `$deployment.re`.
+Press Tab again to select the `region` leaf. With an unambiguous prefix such
+as `$depl.reg`, one Tab reaches the leaf directly. The saved command reads
+`settings.json` in its execution directory, so replay in another project
+uses that project's region. Selecting a branch leaves the command editable.
+
+### Complete a positional argument
+
+```yaml
+version: 1
+commands:
+  deploy:
+    - prefix: [show]
+      completions:
+        - position: 2
+          markerless: {empty: native}
+          source: {format: json, file: ./settings.json, select: keys}
+```
+
+With the JSON above, type `deploy show depl` and press **Tab** to insert the
+literal key `deployment`. An empty second argument uses native completion.
+Typing `deploy show $depl` requests a deferred lookup instead.
+
+### kubectl: default a namespace for reads
+
+Save this as `kube.yaml` alongside the AWS manifest and reload. The rule
+only matches commands starting with `kubectl get`. Asking for all namespaces
+skips it entirely.
+
+```yaml
+version: 1
+commands:
+  kubectl:
+    - prefix: [get]
+      exclude:
+        - names: [--all-namespaces, -A]
+          forms: [bare, equals]
+      defaults:
+        - append: [--namespace=payments-dev]
+          names: [--namespace, -n]
+          forms: [equals, separate, attached]
+tokens:
+  NS_DEV: payments-dev
+  NS_STAGE: payments-stage
+```
+
+```zsh
+kubectl get pods                  # adds --namespace=payments-dev
+kubectl get pods -n payments-stage # keeps the explicit namespace
+kubectl get deployments -A        # lists across namespaces
+```
+
+Type `kubectl get pods --namespace=$NS_` and press **Tab** to choose a
+namespace by name. Other subcommands keep their usual behavior.
 
 ### Exclude a rule and fall through
 
@@ -231,7 +357,8 @@ UTF-16 with a byte-order mark.
 | `commands.<name>[].exact` | String array | Match every argument, including the count. |
 | `commands.<name>[].prefix` | String array | Match the initial arguments. An empty list matches every invocation. Each rule requires exactly one of `exact` and `prefix`. |
 | `commands.<name>[].exclude` | Option-group array, optional | A recognized option in any group disqualifies the rule. Defaults to an empty list. |
-| `commands.<name>[].defaults` | Option-group array, required | Each group supplies its missing arguments, in list order. At least one group is required. |
+| `commands.<name>[].defaults` | Option-group array, optional | Each group supplies its missing arguments, in list order. Each rule needs at least one default or completion. |
+| `commands.<name>[].completions` | Array, optional | File sources for this rule’s options or argument positions. Repeat a selector with different sources to offer all of them. |
 | `defaults[].append` | String array, required | One or more literal arguments to add. Defaults are inserted immediately before the first option boundary `--`, or appended at the end. |
 | `defaults[].names` | Flag-name array, optional | Spellings that suppress this group. Defaults to the first `append` argument. Set `names` explicitly if `append` starts with an option containing a value, such as `--color=auto`. |
 | `exclude[].names` | Flag-name array, required | Spellings that disqualify the rule. |
@@ -258,6 +385,82 @@ rule. Flag scanning stops at `--`. A declared separate value belongs to its
 option even if the value begins with a hyphen. Declare the forms your command
 actually accepts. zsh continues to handle redirection, pipelines, quoting and
 control flow.
+
+### File completion fields
+
+Every entry below belongs under `commands.<name>[].completions[]`.
+
+| Field | Type and default | Meaning |
+| --- | --- | --- |
+| `option` | Flag name, exclusive with `position` | The exact option spelling. Add another entry for an alias. |
+| `position` | Positive integer, exclusive with `option` | Absolute argument slot, starting at 1 after the command. Earlier options, their values, and `--` each occupy a slot. Redirections are excluded. |
+| `markerless.empty` | Optional mapping `markerless: {empty: all}` or `{empty: native}` | Enable literal completion for typed fragments. For an empty fragment, `all` offers root choices and `native` delegates to zsh. Omit the mapping for marked tokens only. |
+| `deferred.guard` | Boolean, defaults to `false` | On execution, require the original command, selector, source and policy to match a current manifest declaration. |
+| `deferred.preserve_trailing_newlines` | Boolean, defaults to `false` | Preserve trailing newlines when executing a deferred lookup. The default uses ordinary quoted command substitution. |
+| `forms` | Options only, defaults to `[separate, equals]` | Enable `--option $fragment`, `--option=$fragment`, or both. |
+| `source.format` | Optional string, defaults to `auto` | Token-completion infers the format from enabled file providers. Set `ini`, `toml`, `json` or `yaml` to select a specific enabled provider. |
+| `source.file` | Required path string | Absolute paths and leading `~` are supported. Relative paths resolve from the working directory at completion and execution. |
+| `source.select` | Required string | `section-names` (inferred or explicit INI) and `keys` return existing top-level names. `leaf-values` walks the document and returns the selected scalar. |
+
+Scope is determined by the command segment containing the cursor, its arguments
+before the active option or positional argument, and the first eligible manifest rule. The active
+option/value pair is omitted when matching `prefix`, `exact` and `exclude`.
+A pipe starts a new command. After `--`, only positional declarations apply. Before it, completing an option name delegates to zsh. A separate option
+value can itself begin with a dash. A preceding option
+with a declared separate value consumes its following argument even when that
+argument looks like the active option. A matching source
+takes precedence over generic token providers in that position. A bare `$`
+after the option lists the root choices. Multiple matching sources are labelled
+with their paths. Source documents are read on demand; editing one doesn't
+require a manifest reload.
+
+Path components match case-insensitive prefixes. A fully spelled intermediate
+component takes precedence. A dot separates levels, and zero-based indices
+select array elements. Literal dots, spaces and other shell-sensitive key
+characters are percent-encoded in the path: `deploy.us%2Eeast` identifies
+the single key `us.east` inside `deploy`. Lookup uses exact, case-sensitive
+keys. Supported mapping keys are nonempty strings without NUL. Booleans and null use JSON
+spelling, and date/time scalars use ISO format.
+
+Shell-overrides selects the source declaration for the current command, rule
+and option or position. Token-completion reads that file and presents candidates.
+For an unmarked argument, branches continue the editable path and selecting a
+leaf inserts its shell-quoted literal. The selected value can appear in shell
+history. For a marked argument, token-completion inserts a quoted lookup
+using the selected parser, file, selection policy and path. When the command
+runs, it reads the file again. By default, zsh trims trailing newlines from
+the result. The saved lookup requires the selected parser to remain enabled
+and continues to work after the manifest declaration is removed.
+
+When a policy must remain active for history replay, enable `guard`. For a
+multiline scalar whose trailing newlines are significant, enable
+`preserve_trailing_newlines`. Set either independently, or use both on one
+completion entry:
+
+```yaml
+- option: --message
+  source: {format: json, file: ./messages.json, select: leaf-values}
+  deferred:
+    guard: true
+    preserve_trailing_newlines: true
+```
+
+Guarded history records the command, selector, declared and selected formats,
+selection policy and file. Removing its declaration or changing from inferred
+to explicit format revokes that lookup after `shell-overrides reload`.
+An invalid manifest edit retains the last valid declaration. Previously
+generated guarded commands keep checking their declaration, including those
+saved before `deferred.guard` became optional. Turning off `guard` affects new
+insertions. Markerless selection always checks its declaration and preserves
+the exact value.
+
+If a selected literal disappears or its guard denies access while the picker
+is open, the original command stays editable. If a deferred lookup fails when
+the command runs, it prints a diagnostic and expands to an empty argument. A
+present empty string succeeds quietly. History containing an accepted literal
+keeps that value even after the source changes. See the
+[token-completion file provider reference](https://github.com/randallwick/token-completion)
+for parser dependencies, supported documents and standalone use.
 
 ## Shell settings
 
@@ -307,5 +510,5 @@ to exercise plugin changes from a fresh startup. The regression suite runs from
 the checkout using a Python interpreter that can import PyYAML:
 
 ```sh
-python3 tests/test_plugin.py -v
+python3 -m unittest discover -s tests -v
 ```
