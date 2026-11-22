@@ -30,6 +30,12 @@ delete `kernel.yaml` and run `shell-overrides reload`.
 
 ## Installation
 
+A default clone follows `stable`, the latest tested release. Follow the
+`development` branch to try merged changes before release, or select an
+immutable version tag such as `v0.2.0` to stay on one release. A Nix input
+stays at its locked revision until you update it. Contributors target
+`development`. [Contribution and release guide](CONTRIBUTING.md)
+
 Source installs require zsh, POSIX `cksum`, and Python 3.9+ with PyYAML.
 Check with `python3 -c 'import yaml'`. If the Python on your PATH changes
 across projects, create a dedicated environment once:
