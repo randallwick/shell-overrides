@@ -54,11 +54,24 @@ def option(spec, default):
 
 
 def completion(spec):
-    fields(spec, ["option", "forms", "source"])
-    flag = string(spec["option"])
-    require(re.fullmatch(FLAG, flag), "invalid completion option")
-    forms = strings(spec.get("forms", ["separate", "equals"]))
-    require(forms and set(forms) <= {"separate", "equals"}, "unknown completion form")
+    fields(spec, ["option", "position", "forms", "markerless", "source"])
+    require(("option" in spec) != ("position" in spec), "choose one of option or position")
+    if "option" in spec:
+        selector = string(spec["option"])
+        require(re.fullmatch(FLAG, selector), "invalid completion option")
+        forms = strings(spec.get("forms", ["separate", "equals"]))
+        require(forms and set(forms) <= {"separate", "equals"}, "unknown completion form")
+    else:
+        position = spec["position"]
+        require(type(position) is int and position >= 1, "position must be a positive integer")
+        require("forms" not in spec, "forms applies only to an option")
+        selector, forms = f"@{position}", ["positional"]
+    empty = "off"
+    if "markerless" in spec:
+        settings = spec["markerless"]
+        fields(settings, ["empty"])
+        empty = string(settings["empty"])
+        require(empty in {"all", "native"}, "markerless.empty must be all or native")
     src = spec["source"]
     fields(src, ["format", "file", "select"])
     fmt = string(src.get("format", "auto"))
@@ -66,7 +79,7 @@ def completion(spec):
     require(fmt in {"auto", "ini", "toml", "json", "yaml"} and file, "expected a format and file")
     require(select in {"keys", "leaf-values"} or (fmt in {"auto", "ini"} and select == "section-names"),
             "expected keys, leaf-values, or INI section-names")
-    return [flag, " ".join(forms), fmt, select, file]
+    return [selector, " ".join(forms), fmt, select, file, empty]
 
 
 def compile_yaml(raw):
@@ -196,7 +209,7 @@ def remove_conflicts(files, previous, config, diagnostics):
 def snapshot(config, sources, records):
     # Byte lengths let UTF-16 sources contain arbitrary NULs. Rule records
     # have a separate, NUL-free string contract suitable for zsh argv.
-    parts = [b"SO/4\0", os.fsencode(config), b"\0"]
+    parts = [b"SO/5\0", os.fsencode(config), b"\0"]
     for name, raw in sources:
         parts.extend([os.fsencode(name), b"\0", str(len(raw)).encode(), b"\0", raw])
     # POSIX cksum is available in source installs on macOS and Linux.

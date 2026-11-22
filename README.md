@@ -207,6 +207,7 @@ commands:
       completions:
         - option: --profile
           forms: [equals, separate]
+          markerless: {empty: all}
           source:
             file: ~/.aws/credentials
             select: section-names
@@ -219,7 +220,10 @@ editable line contains token-completion’s quoted file lookup expression. AWS
 receives one explicit profile value, `work-read-stage`. Credential option
 names and values never appear as candidates, and the generated lookup can
 only return a section name. Omitting `--profile` still supplies the default.
-Bare `--profile <Tab>` continues through normal zsh completion.
+For a literal profile, type `aws s3 ls --profile ` and press **Tab**, or
+start with `--profile=wo` to narrow the list. The selected name is quoted on
+the command line and stored in history. The `markerless` entry enables this
+shortcut. Remove it to keep ordinary zsh completion for unmarked arguments.
 
 ### Walk a project settings file one component at a time
 
@@ -247,6 +251,23 @@ Press Tab again to select the `region` leaf. With an unambiguous prefix such
 as `$depl.reg`, one Tab reaches the leaf directly. The saved command reads
 `settings.json` in its execution directory, so replay in another project
 uses that project's region. Selecting a branch leaves the command editable.
+
+### Complete a positional argument
+
+```yaml
+version: 1
+commands:
+  deploy:
+    - prefix: [show]
+      completions:
+        - position: 2
+          markerless: {empty: native}
+          source: {format: json, file: ./settings.json, select: keys}
+```
+
+With the JSON above, type `deploy show depl` and press **Tab** to insert the
+literal key `deployment`. An empty second argument uses native completion.
+Typing `deploy show $depl` requests a deferred lookup instead.
 
 ### kubectl: default a namespace for reads
 
@@ -337,7 +358,7 @@ UTF-16 with a byte-order mark.
 | `commands.<name>[].prefix` | String array | Match the initial arguments. An empty list matches every invocation. Each rule requires exactly one of `exact` and `prefix`. |
 | `commands.<name>[].exclude` | Option-group array, optional | A recognized option in any group disqualifies the rule. Defaults to an empty list. |
 | `commands.<name>[].defaults` | Option-group array, optional | Each group supplies its missing arguments, in list order. Each rule needs at least one default or completion. |
-| `commands.<name>[].completions` | Array, optional | File sources for this rule’s options. Repeat an option with different sources to offer all of them. |
+| `commands.<name>[].completions` | Array, optional | File sources for this rule’s options or argument positions. Repeat a selector with different sources to offer all of them. |
 | `defaults[].append` | String array, required | One or more literal arguments to add. Defaults are inserted immediately before the first option boundary `--`, or appended at the end. |
 | `defaults[].names` | Flag-name array, optional | Spellings that suppress this group. Defaults to the first `append` argument. Set `names` explicitly if `append` starts with an option containing a value, such as `--color=auto`. |
 | `exclude[].names` | Flag-name array, required | Spellings that disqualify the rule. |
@@ -371,16 +392,19 @@ Every entry below belongs under `commands.<name>[].completions[]`.
 
 | Field | Type and default | Meaning |
 | --- | --- | --- |
-| `option` | Required flag name | The exact option spelling. Add another entry for an alias. |
-| `forms` | List, defaults to `[separate, equals]` | Enable `--option $fragment`, `--option=$fragment`, or both. |
+| `option` | Flag name, exclusive with `position` | The exact option spelling. Add another entry for an alias. |
+| `position` | Positive integer, exclusive with `option` | Absolute argument slot, starting at 1 after the command. Earlier options, their values, and `--` each occupy a slot. Redirections are excluded. |
+| `markerless.empty` | Optional mapping `markerless: {empty: all}` or `{empty: native}` | Enable literal completion for typed fragments. For an empty fragment, `all` offers root choices and `native` delegates to zsh. Omit the mapping for marked tokens only. |
+| `forms` | Options only, defaults to `[separate, equals]` | Enable `--option $fragment`, `--option=$fragment`, or both. |
 | `source.format` | Optional string, defaults to `auto` | Token-completion infers the format from enabled file providers. Set `ini`, `toml`, `json` or `yaml` to select a specific enabled provider. |
 | `source.file` | Required path string | Absolute paths and leading `~` are supported. Relative paths resolve from the working directory at completion and execution. |
 | `source.select` | Required string | `section-names` (inferred or explicit INI) and `keys` return existing top-level names. `leaf-values` walks the document and returns the selected scalar. |
 
 Scope is determined by the command segment containing the cursor, its arguments
-before the active option, and the first eligible manifest rule. The active
+before the active option or positional argument, and the first eligible manifest rule. The active
 option/value pair is omitted when matching `prefix`, `exact` and `exclude`.
-A pipe starts a new command; `--` ends option matching. A preceding option
+A pipe starts a new command. After `--`, only positional declarations apply. Before it, completing an option name delegates to zsh. A separate option
+value can itself begin with a dash. A preceding option
 with a declared separate value consumes its following argument even when that
 argument looks like the active option. A matching source
 takes precedence over generic token providers in that position. A bare `$`
@@ -398,8 +422,10 @@ preserve whitespace, including trailing newlines. Booleans and null use JSON
 spelling, and date/time scalars use ISO format.
 
 Shell-overrides selects the source declaration for the current command, rule
-and option. Token-completion reads that file, presents candidates and inserts
-its deferred lookup. When the line executes, token-completion asks the loaded
+and option or position. Token-completion reads that file and presents candidates.
+For an unmarked argument, branches continue the editable path and selecting a
+leaf inserts its shell-quoted literal. The selected value can appear in shell
+history. For a marked argument, token-completion inserts its deferred lookup. When the line executes, token-completion asks the loaded
 shell-overrides provider whether the command, option, format, selection policy
 and file still match a current declaration. History records both the declared
 mode and the parser actually selected. Switching from inferred to explicit
@@ -409,8 +435,11 @@ when `source.format` explicitly names it. Removing the declaration and
 running `shell-overrides reload` revokes it, including for saved history
 entries. An invalid manifest edit retains the last valid declaration.
 
-A missing key, unavailable source or revoked declaration produces a diagnostic
-and an empty argument. A present empty string succeeds quietly. See the
+If a selected literal disappears or its guard denies access while the picker
+is open, the original command stays editable. If a deferred lookup fails when
+the command runs, it prints a diagnostic and expands to an empty argument. A
+present empty string succeeds quietly. History containing an accepted literal
+keeps that value even after the source changes. See the
 [token-completion file provider reference](https://github.com/randallwick/token-completion)
 for parser dependencies, supported documents and standalone use.
 

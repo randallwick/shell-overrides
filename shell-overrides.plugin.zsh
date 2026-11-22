@@ -52,7 +52,7 @@ _so_prepare_argv() {
       arg=${argv[i]}
       if [[ $arg == -- ]]; then
         limit=i-1
-        option_position=0
+        option_position=2
         break
       fi
       [[ $arg == -* ]] || continue
@@ -110,7 +110,7 @@ _so_warm_records() {
 
   # Under the C locale, lengths and slices count bytes. A length-framed
   # manifest can include BOMs, NULs, and trailing newlines.
-  prefix="SO/4${nul}${config}${nul}"
+  prefix="SO/5${nul}${config}${nul}"
   for file in "$config"/*.y(a|)ml(N-.); do
     [[ -r $file ]] || return 1
     raw=${mapfile[$file]}
@@ -175,11 +175,11 @@ _so_reload() {
         pos=end+1
         ;;
       source)
-        _so_sources+=("${(@)records[pos,pos+6]}")
+        _so_sources+=("${(@)records[pos,pos+7]}")
         if [[ " ${records[pos+3]} " == *' separate '* ]]; then
           _so_source_separate[${records[pos]}/${records[pos+1]}/${records[pos+2]}]=1
         fi
-        (( pos += 7 ))
+        (( pos += 8 ))
         ;;
       token)
         _so_token_files+=("${records[pos++]}")
@@ -212,32 +212,60 @@ token_provider_shell_overrides_query() {
   done
 }
 
-# Each declaration occupies seven fields: command, rule index, option, forms,
-# format, selection policy and file. History stores the policy identity so a
-# reordered rule cannot silently turn a key lookup into a value lookup.
+# Older token-completion versions only ask about marked option values.
 token_provider_shell_overrides_context() {
+  token_provider_shell_overrides_argument_context token "$@"
+}
+
+token_provider_shell_overrides_argument_context() {
   emulate -L zsh
-  local fragment=$1 cmd=$2 opt=$3 form=$4
-  shift 4
-  (( ${+functions[token_completion_scope]} && ${+functions[token_completion_file]} && ${+_so_start[$cmd]} && $#_so_sources )) || return 0
+  (( $# >= 5 )) || return 0
+  local mode=$1 fragment=$2 cmd=$3 selector=$4 form=$5
+  shift 5
+  [[ -n $cmd && $mode == (literal|token) ]] || return 0
+  (( ${+functions[token_completion_scope]} && ${+_so_start[$cmd]} && $#_so_sources )) || return 0
   local _so_rule=-1 _so_option_position=0
   local -a _so_argv
   _so_prepare_argv "$cmd" "$@"
-  (( _so_option_position )) || return 0
+  if [[ $form == positional && -z $selector ]]; then
+    (( _so_option_position )) || return 0
+    [[ $mode == literal && $fragment == -* && $_so_option_position == 1 ]] && return 0
+    selector="@$(( $# + 1 ))"
+  else
+    [[ $form == (separate|equals) && $_so_option_position == 1 ]] || return 0
+  fi
+  local helper=token_completion_file guard=token_provider_shell_overrides_authorize
+  if [[ $mode == literal ]]; then
+    helper+=_literal
+    guard+=_literal
+  fi
   local -i i
-  for ((i=1; i<=$#_so_sources; i+=7)); do
+  for ((i=1; i<=$#_so_sources; i+=8)); do
     [[ ${_so_sources[i]} == "$cmd" && ${_so_sources[i+1]} == "$_so_rule" &&
-       ${_so_sources[i+2]} == "$opt" && " ${_so_sources[i+3]} " == *" $form "* ]] || continue
+       ${_so_sources[i+2]} == "$selector" && " ${_so_sources[i+3]} " == *" $form "* ]] || continue
     token_completion_scope
-    token_completion_file "$fragment" "${_so_sources[i+4]}" "${_so_sources[i+5]}" "${_so_sources[i+6]}" \
-      token_provider_shell_overrides_authorize "$cmd" "$opt" "${_so_sources[i+4]}"
+    if [[ $mode == literal ]]; then
+      [[ ${_so_sources[i+7]} != off && ( -n $fragment || ${_so_sources[i+7]} == all ) ]] || continue
+    fi
+    (( ${+functions[$helper]} )) || continue
+    "$helper" "$fragment" "${_so_sources[i+4]}" "${_so_sources[i+5]}" "${_so_sources[i+6]}" \
+      "$guard" "$cmd" "$selector" "${_so_sources[i+4]}"
   done
 }
 
-# Called by token-completion before it reads the file. Match the same policy
-# identity used to offer candidates even if the manifest was reloaded.
+# Check the original declaration again when a user accepts or replays a result.
 token_provider_shell_overrides_authorize() {
+  _so_authorize token "$@"
+}
+
+token_provider_shell_overrides_authorize_literal() {
+  _so_authorize literal "$@"
+}
+
+_so_authorize() {
   emulate -L zsh
+  local mode=$1
+  shift
   # Pre-inference history carried only the explicit format. Normalize it to
   # the new (declared, resolved) pair without permitting an auto declaration.
   if (( $# == 5 )); then
@@ -249,10 +277,10 @@ token_provider_shell_overrides_authorize() {
   [[ $declared == auto || $declared == "$resolved" ]] || return 1
   [[ $policy != section-names || $resolved == ini ]] || return 1
   local -i i
-  for ((i=1; i<=$#_so_sources; i+=7)); do
+  for ((i=1; i<=$#_so_sources; i+=8)); do
     if [[ ${_so_sources[i]} == "$cmd" && ${_so_sources[i+2]} == "$opt" &&
           ${_so_sources[i+4]} == "$declared" && ${_so_sources[i+5]} == "$policy" &&
-          ${_so_sources[i+6]} == "$file" ]]; then
+          ${_so_sources[i+6]} == "$file" && ( $mode == token || ${_so_sources[i+7]} != off ) ]]; then
       return 0
     fi
   done
