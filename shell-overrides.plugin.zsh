@@ -1,6 +1,6 @@
 typeset -g _so_root=${${(%):-%x}:A:h}
-typeset -ga _so_data _so_token_files _so_token_keys _so_token_values _so_wrapped
-typeset -gA _so_start
+typeset -ga _so_data _so_token_files _so_token_keys _so_token_values _so_wrapped _so_sources
+typeset -gA _so_start _so_source_separate
 
 _so_prepare_argv() {
   emulate -L zsh
@@ -8,7 +8,7 @@ _so_prepare_argv() {
   shift
   # A command block contains ordered rules, each followed by its flag groups.
   local -i pos=${_so_start[$target]} count=_so_data[pos++] r n e d i j k limit matched
-  local -i spec appends names forms
+  local -i spec appends names forms option_position takes_value
   local mode flag form arg groups
   local -a additions starts seen
   local -A bare separate equals attached
@@ -47,15 +47,23 @@ _so_prepare_argv() {
     done
     (( matched )) || continue
     limit=$#
+    option_position=1
     for ((i=1; i<=$#; i++)); do
       arg=${argv[i]}
       if [[ $arg == -- ]]; then
         limit=i-1
+        option_position=0
         break
       fi
       [[ $arg == -* ]] || continue
       groups=${bare[$arg]}
-      if [[ -n ${separate[$arg]} && i -lt $# && ${argv[i+1]} != -- ]]; then
+      takes_value=$(( ${+separate[$arg]} || ${+_so_source_separate[$target/$r/$arg]} ))
+      if (( takes_value && i == $# )); then
+        # Completion passes the argv prefix preceding its active option.
+        # That next word would actually be this option's value.
+        option_position=0
+      fi
+      if (( takes_value && i < $# )) && [[ ${argv[i+1]} != -- ]]; then
         groups+=${separate[$arg]}
         (( i++ ))
       else
@@ -76,6 +84,8 @@ _so_prepare_argv() {
       [[ -n ${seen[i]} ]] && matched=0
     done
     (( matched )) || continue
+    _so_rule=$r
+    _so_option_position=$option_position
     for ((i=e+1; i<=e+d; i++)); do
       [[ -n ${seen[i]} ]] && continue
       k=starts[i]
@@ -100,7 +110,7 @@ _so_warm_records() {
 
   # Under the C locale, lengths and slices count bytes. A length-framed
   # manifest can include BOMs, NULs, and trailing newlines.
-  prefix="SO/2${nul}${config}${nul}"
+  prefix="SO/3${nul}${config}${nul}"
   for file in "$config"/*.y(a|)ml(N-.); do
     [[ -r $file ]] || return 1
     raw=${mapfile[$file]}
@@ -144,6 +154,7 @@ _so_reload() {
   for name in "${_so_wrapped[@]}"; do
     [[ ${functions[$name]} == ${functions[_so_wrapper]} ]] && unfunction "$name"
   done
+  _so_sources=() _so_source_separate=()
   _so_data=() _so_wrapped=() _so_start=()
   _so_token_files=() _so_token_keys=() _so_token_values=()
   while ((pos < $#records)); do
@@ -163,6 +174,13 @@ _so_reload() {
         fi
         pos=end+1
         ;;
+      source)
+        _so_sources+=("${(@)records[pos,pos+6]}")
+        if [[ " ${records[pos+3]} " == *' separate '* ]]; then
+          _so_source_separate[${records[pos]}/${records[pos+1]}/${records[pos+2]}]=1
+        fi
+        (( pos += 7 ))
+        ;;
       token)
         _so_token_files+=("${records[pos++]}")
         _so_token_keys+=("${records[pos++]}")
@@ -177,6 +195,7 @@ _so_wrapper() {
     command "${funcstack[1]}" "$@"
     return $?
   fi
+  local _so_rule _so_option_position
   local -a _so_argv=("$@")
   _so_prepare_argv "${funcstack[1]}" "$@"
   # Run outside the preparation scope so its local names cannot mask the
@@ -193,10 +212,57 @@ token_provider_shell_overrides_query() {
   done
 }
 
+# Each declaration occupies seven fields: command, rule index, option, forms,
+# format, selection policy and file. History stores the policy identity so a
+# reordered rule cannot silently turn a key lookup into a value lookup.
+token_provider_shell_overrides_context() {
+  emulate -L zsh
+  local fragment=$1 cmd=$2 opt=$3 form=$4
+  shift 4
+  (( ${+_so_start[$cmd]} && $#_so_sources )) || return 0
+  local _so_rule=-1 _so_option_position=0
+  local -a _so_argv identity
+  _so_prepare_argv "$cmd" "$@"
+  (( _so_option_position )) || return 0
+  local -i i
+  local fmt policy file kind display node insertion
+  for ((i=1; i<=$#_so_sources; i+=7)); do
+    [[ ${_so_sources[i]} == "$cmd" && ${_so_sources[i+1]} == "$_so_rule" &&
+       ${_so_sources[i+2]} == "$opt" && " ${_so_sources[i+3]} " == *" $form "* ]] || continue
+    token_completion_scope
+    fmt=${_so_sources[i+4]} policy=${_so_sources[i+5]} file=${_so_sources[i+6]}
+    identity=("$cmd" "$opt" "$fmt" "$policy" "$file")
+    while IFS= read -r -d '' kind && IFS= read -r -d '' display && IFS= read -r -d '' node; do
+      if [[ $kind == branch ]]; then
+        insertion='$'${node}
+      else
+        insertion='"${$(shell-overrides lookup '"${(j: :)${(@q)identity}} ${(q)node}"' && builtin print -rn -- .)%.}"'
+      fi
+      token_completion_offer "$display" "$file" "$insertion"
+    done < <(command "${SHELL_OVERRIDES_PYTHON:-python3}" "$_so_root/file_source.py" list "$fmt" "$policy" "$file" "$fragment")
+  done
+}
+
+_so_lookup() {
+  emulate -L zsh
+  local -i i
+  for ((i=1; i<=$#_so_sources; i+=7)); do
+    if [[ ${_so_sources[i]} == "$1" && ${_so_sources[i+2]} == "$2" &&
+          ${_so_sources[i+4]} == "$3" && ${_so_sources[i+5]} == "$4" &&
+          ${_so_sources[i+6]} == "$5" ]]; then
+      command "${SHELL_OVERRIDES_PYTHON:-python3}" "$_so_root/file_source.py" get "$3" "$4" "$5" "$6"
+      return $?
+    fi
+  done
+  print -ru2 -- 'shell-overrides: lookup source is no longer declared'
+  return 1
+}
+
 shell-overrides() {
   emulate -L zsh
   case "$1:$#" in
     reload:1) _so_reload ;;
+    lookup:7) shift; _so_lookup "$@" ;;
     --help:1|-h:1|help:1|:0)
       local title='shell-overrides'
       if [[ -t 1 && $TERM != dumb && -z ${NO_COLOR+x} ]]; then

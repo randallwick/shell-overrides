@@ -187,6 +187,68 @@ The shared `PROFILE_` prefix gives you an enum-like menu of familiar values.
 You can still type any configured profile. The tokens are picker entries;
 they do not create shell variables or configure credentials.
 
+### Discover AWS profiles from an INI file
+
+As an alternative to maintaining the static profile tokens above, replace the
+AWS rule with this one. Save it in your manifest directory and run
+`shell-overrides reload`. Load [token-completion](https://github.com/randallwick/token-completion)
+with contextual provider support; if you select providers explicitly, include
+`shell_overrides`.
+
+```yaml
+version: 1
+commands:
+  aws:
+    - prefix: []
+      defaults:
+        - append: [--profile=work-read-dev]
+          names: [--profile]
+          forms: [equals, separate]
+      completions:
+        - option: --profile
+          forms: [equals, separate]
+          source:
+            format: ini
+            file: ~/.aws/credentials
+            select: section-names
+```
+
+With sections `[work-read-dev]` and `[work-read-stage]`, type
+`aws s3 ls --profile=$wo` or `aws s3 ls --profile $wo` and press **Tab**.
+The picker shows the two section names. Choose the staging profile, and the
+editable line contains a quoted `shell-overrides lookup` expression. AWS
+receives one explicit profile value, `work-read-stage`. Credential option
+names and values never appear as candidates, and the generated lookup can
+only return a section name. Omitting `--profile` still supplies the default.
+Bare `--profile <Tab>` continues through normal zsh completion.
+
+### Walk a project settings file one component at a time
+
+For a CLI called `deploy`, save the following manifest and reload:
+
+```yaml
+version: 1
+commands:
+  deploy:
+    - prefix: [show]
+      completions:
+        - option: --region
+          source: {format: json, file: ./settings.json, select: leaf-values}
+```
+
+Given this `settings.json`:
+
+```json
+{"deployment": {"region": "us-east-1"}, "dependencies": {"registry": "local"}}
+```
+
+Type `deploy show --region=$de.re` and press **Tab**. Both first components
+match. Choosing `deployment.` expands the token to `$deployment.re`.
+Press Tab again to select the `region` leaf. With an unambiguous prefix such
+as `$depl.reg`, one Tab reaches the leaf directly. The saved command reads
+`settings.json` in its execution directory, so replay in another project
+uses that project's region. Selecting a branch leaves the command editable.
+
 ### kubectl: default a namespace for reads
 
 Save this as `kube.yaml` alongside the AWS manifest and reload. The rule
@@ -275,7 +337,8 @@ UTF-16 with a byte-order mark.
 | `commands.<name>[].exact` | String array | Match every argument, including the count. |
 | `commands.<name>[].prefix` | String array | Match the initial arguments. An empty list matches every invocation. Each rule requires exactly one of `exact` and `prefix`. |
 | `commands.<name>[].exclude` | Option-group array, optional | A recognized option in any group disqualifies the rule. Defaults to an empty list. |
-| `commands.<name>[].defaults` | Option-group array, required | Each group supplies its missing arguments, in list order. At least one group is required. |
+| `commands.<name>[].defaults` | Option-group array, optional | Each group supplies its missing arguments, in list order. Each rule needs at least one default or completion. |
+| `commands.<name>[].completions` | Array, optional | File sources for this rule’s options. Repeat an option with different sources to offer all of them. |
 | `defaults[].append` | String array, required | One or more literal arguments to add. Defaults are inserted immediately before the first option boundary `--`, or appended at the end. |
 | `defaults[].names` | Flag-name array, optional | Spellings that suppress this group. Defaults to the first `append` argument. Set `names` explicitly if `append` starts with an option containing a value, such as `--color=auto`. |
 | `exclude[].names` | Flag-name array, required | Spellings that disqualify the rule. |
@@ -302,6 +365,50 @@ rule. Flag scanning stops at `--`. A declared separate value belongs to its
 option even if the value begins with a hyphen. Declare the forms your command
 actually accepts. zsh continues to handle redirection, pipelines, quoting and
 control flow.
+
+### File completion fields
+
+Every entry below belongs under `commands.<name>[].completions[]`.
+
+| Field | Type and default | Meaning |
+| --- | --- | --- |
+| `option` | Required flag name | The exact option spelling. Add another entry for an alias. |
+| `forms` | List, defaults to `[separate, equals]` | Enable `--option $fragment`, `--option=$fragment`, or both. |
+| `source.format` | Required string | `ini`, `toml`, `json` or `yaml`. |
+| `source.file` | Required path string | Absolute paths and leading `~` are supported. Relative paths resolve from the working directory at completion and execution. |
+| `source.select` | Required string | `section-names` (INI only) and `keys` return existing top-level names. `leaf-values` walks the document and returns the selected scalar. |
+
+Scope is determined by the command segment containing the cursor, its arguments
+before the active option, and the first eligible manifest rule. The active
+option/value pair is omitted when matching `prefix`, `exact` and `exclude`.
+A pipe starts a new command; `--` ends option matching. A preceding option
+with a declared separate value consumes its following argument even when that
+argument looks like the active option. A matching source
+takes precedence over generic token providers in that position. A bare `$`
+after the option lists the root choices. Multiple matching sources are labelled
+with their paths. Source documents are read on demand; editing one doesn't
+require a manifest reload.
+
+Path components match case-insensitive prefixes. A fully spelled intermediate
+component takes precedence. A dot separates levels, and zero-based indices
+select array elements. Literal dots, spaces and other shell-sensitive key
+characters are percent-encoded in the path: `deploy.us%2Eeast` identifies
+the single key `us.east` inside `deploy`. Lookup uses exact, case-sensitive
+keys. Supported mapping keys are nonempty strings without NUL; scalar strings
+preserve whitespace, including trailing newlines. Booleans and null use JSON
+spelling, and date/time scalars use ISO format.
+
+INI uses case-preserving option names and disables interpolation. JSON and
+INI use Python's standard library; YAML uses PyYAML's safe loader. TOML uses
+`tomllib` on Python 3.11+; source installs on Python 3.9–3.10 need `tomli`
+in the plugin interpreter for TOML sources. The Nix package supplies the parser.
+
+The generated lookup records the command, option, format, selection policy,
+file and exact key path. It checks the current manifest declaration before
+reading the source. A removed declaration, missing key or unreadable document
+produces a diagnostic and an empty argument on replay. A present empty string
+succeeds quietly. Parser diagnostics omit source lines, and the picker shows
+paths and provenance only.
 
 ## Shell settings
 

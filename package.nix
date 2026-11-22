@@ -1,7 +1,7 @@
 { lib, stdenvNoCC, python3, coreutils }:
 
 let
-  interpreter = python3.withPackages (ps: [ ps.pyyaml ]);
+  interpreter = python3.withPackages (ps: [ ps.pyyaml ] ++ lib.optional (lib.versionOlder python3.version "3.11") ps.tomli);
 in
 stdenvNoCC.mkDerivation {
   pname = "shell-overrides";
@@ -12,7 +12,7 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
     destination="$out/share/shell-overrides"
     install -Dm644 cache.py "$destination/cache.py"
-    install -m644 shell-overrides.plugin.zsh "$destination/"
+    install -m644 file_source.py shell-overrides.plugin.zsh "$destination/"
     substituteInPlace "$destination/shell-overrides.plugin.zsh" \
       --replace-fail 'SHELL_OVERRIDES_PYTHON:-python3' 'SHELL_OVERRIDES_PYTHON:-${interpreter}/bin/python3'
     substituteInPlace "$destination/shell-overrides.plugin.zsh" \
