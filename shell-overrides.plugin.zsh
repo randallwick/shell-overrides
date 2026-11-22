@@ -1,6 +1,6 @@
 typeset -g _so_root=${${(%):-%x}:A:h}
 typeset -ga _so_data _so_token_files _so_token_keys _so_token_values _so_wrapped _so_sources
-typeset -gA _so_start _so_source_separate
+typeset -gA _so_start _so_source_separate _so_nav_root _so_nav_env _so_nav_empty
 
 _so_prepare_argv() {
   emulate -L zsh
@@ -110,7 +110,7 @@ _so_warm_records() {
 
   # Under the C locale, lengths and slices count bytes. A length-framed
   # manifest can include BOMs, NULs, and trailing newlines.
-  prefix="SO/6${nul}${config}${nul}"
+  prefix="SO/7${nul}${config}${nul}"
   for file in "$config"/*.y(a|)ml(N-.); do
     [[ -r $file ]] || return 1
     raw=${mapfile[$file]}
@@ -155,6 +155,7 @@ _so_reload() {
     [[ ${functions[$name]} == ${functions[_so_wrapper]} ]] && unfunction "$name"
   done
   _so_sources=() _so_source_separate=()
+  _so_nav_root=() _so_nav_env=() _so_nav_empty=()
   _so_data=() _so_wrapped=() _so_start=()
   _so_token_files=() _so_token_keys=() _so_token_values=()
   while ((pos < $#records)); do
@@ -174,6 +175,12 @@ _so_reload() {
         fi
         pos=end+1
         ;;
+      navigate)
+        name=${records[pos++]}
+        _so_nav_root[$name]=${records[pos++]}
+        _so_nav_env[$name]=${records[pos++]}
+        _so_nav_empty[$name]=${records[pos++]}
+        ;;
       source)
         _so_sources+=("${(@)records[pos,pos+9]}")
         if [[ " ${records[pos+3]} " == *' separate '* ]]; then
@@ -189,10 +196,50 @@ _so_reload() {
     esac
   done
 }
+# Only the validated parameter name is indirect. Paths stay literal, including
+# spaces, newlines, dollar signs and glob characters.
+_so_navigation_root() {
+  local _so_env_name=${_so_nav_env[$1]}
+  _so_directory=${_so_nav_root[$1]}
+  if [[ -n $_so_env_name && -n ${(P)_so_env_name} ]]; then
+    _so_directory=${(P)_so_env_name}
+  fi
+  case $_so_directory in
+    '~') _so_directory=$HOME ;;
+    '~/'*) _so_directory=$HOME/${_so_directory[3,-1]} ;;
+  esac
+  _so_directory=${_so_directory:a}
+}
+
+_so_navigate() {
+  emulate -L zsh
+  local _so_name=$1 _so_directory
+  shift
+  _so_navigation_root "$_so_name"
+  local query="$*" target entry
+  if [[ -n $query && $query != (.|..|*/*) && -d "$_so_directory/$query" ]]; then
+    target=$query
+  else
+    IFS= read -r -d '' target < <(
+      for entry in "$_so_directory"/*(N-/); do print -rN -- "${entry:t}"; done |
+        FZF_DEFAULT_OPTS= FZF_DEFAULT_OPTS_FILE= command fzf --read0 --print0 --filter "$query" --ignore-case
+    )
+  fi
+  if [[ -z $target || $target == (.|..|*/*) || ! -d "$_so_directory/$target" ]]; then
+    print -ru2 -- "$_so_name: no matching directory for ${(q)query}"
+    return 1
+  fi
+  builtin cd -- "$_so_directory/$target"
+}
+
 _so_wrapper() {
   emulate -L zsh
   if [[ ${SHELL_OVERRIDE:-} == 0 || ${SHELL_OVERRIDE:-} == false ]]; then
     command "${funcstack[1]}" "$@"
+    return $?
+  fi
+  if (( ${+_so_nav_root[${funcstack[1]}]} )); then
+    _so_navigate "${funcstack[1]}" "$@"
     return $?
   fi
   local _so_rule _so_option_position
@@ -220,6 +267,18 @@ token_provider_shell_overrides_context() {
 token_provider_shell_overrides_argument_context() {
   emulate -L zsh
   (( $# >= 5 )) || return 0
+  # Resolve a navigation root before file-source locals such as "cmd" can
+  # shadow a manifest-selected shell parameter of the same name.
+  if [[ -n $3 ]] && (( ${+_so_nav_root[$3]} )); then
+    [[ $1 == literal && $5 == positional && -z $4 && $# == 5 &&
+       ${_so_nav_empty[$3]} != off &&
+       ( -n $2 || ${_so_nav_empty[$3]} == all ) ]] || return 0
+    (( ${+_so_start[$3]} && $+functions[token_completion_from] )) || return 0
+    local _so_directory
+    _so_navigation_root "$3"
+    token_completion_from directory "$2" "$_so_directory"
+    return
+  fi
   local mode=$1 fragment=$2 cmd=$3 selector=$4 form=$5
   shift 5
   [[ -n $cmd && $mode == (literal|token) ]] || return 0
