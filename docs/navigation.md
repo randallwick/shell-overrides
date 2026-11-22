@@ -21,11 +21,13 @@ directory unchanged and returns an error.
 
 Install fzf for fuzzy execution from a source checkout. The Nix package supplies it.
 
-With token-completion 0.3.0 or later, `work <Tab>` lists the immediate
+With the `shell_overrides` and `directory` providers enabled in token-completion
+0.3.0 or later, `work <Tab>` lists the immediate
 visible child directories and symlinks to directories. The picker reads
 the root each time, including after you create or rename a directory.
 Type to narrow the choices, Tab to cycle and Enter to insert the selected
-name. Press Enter at the shell prompt to change directory.
+name. Press Enter at the shell prompt to change directory. Direct invocations
+such as `work capi` also work when token-completion is disabled.
 
 `root` is a literal path. A leading `~` or `~/` expands to your home, and
 relative paths resolve from the current directory. Optional `env` names a

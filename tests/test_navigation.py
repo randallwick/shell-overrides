@@ -67,7 +67,7 @@ class Navigation(unittest.TestCase):
         self.manifest.write_text(MANIFEST.replace("WORK_ROOT", "cmd"))
         run = self.run_zsh("""
 token_completion_scope() { print scope; }
-token_completion_directory() { print -r -- "$#:$1:$2"; }
+token_completion_from() { print -r -- "$#:$1:$2:$3"; }
 query() { token_provider_shell_overrides_argument_context "$@"; }
 query literal "" jump "" positional
 query literal wo jump "" positional prior
@@ -77,8 +77,23 @@ rm "$SHELL_OVERRIDES_MANIFEST_DIR/nav.yaml"
 shell-overrides reload
 (( ! $+functions[jump] ))
 """, cmd=str(self.root / "override"))
-        self.assertEqual(run.stdout.decode().splitlines(), ["scope", f"2::{self.root}/override"], run.stderr)
+        self.assertEqual(run.stdout.decode().splitlines(), [f"3:directory::{self.root}/override"], run.stderr)
         self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_execution_and_completion_are_independent(self):
+        (self.root / "client api").mkdir()
+        run = self.run_zsh("""
+token_completion_directory_matches() { print -rN -- missing; }
+token_completion_from() { print unexpected; }
+jump capi && print -rn -- "$PWD"
+""")
+        self.assertEqual(run.stdout, os.fsencode(self.root / "client api"), run.stderr)
+        run = self.run_zsh("""
+token_completion_scope() { print unexpected; }
+token_completion_from() { return 1; }
+token_provider_shell_overrides_argument_context literal "" jump "" positional
+""")
+        self.assertEqual(run.stdout, b"", run.stderr)
 
     def test_malformed_edit_preserves_command(self):
         (self.root / "ok").mkdir()

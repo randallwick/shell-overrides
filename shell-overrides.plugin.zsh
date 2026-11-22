@@ -219,8 +219,6 @@ _so_navigate() {
   local query="$*" target entry
   if [[ -n $query && $query != (.|..|*/*) && -d "$_so_directory/$query" ]]; then
     target=$query
-  elif (( $+functions[token_completion_directory_matches] )); then
-    IFS= read -r -d '' target < <(token_completion_directory_matches "$query" "$_so_directory")
   else
     IFS= read -r -d '' target < <(
       for entry in "$_so_directory"/*(N-/); do print -rN -- "${entry:t}"; done |
@@ -275,12 +273,10 @@ token_provider_shell_overrides_argument_context() {
     [[ $1 == literal && $5 == positional && -z $4 && $# == 5 &&
        ${_so_nav_empty[$3]} != off &&
        ( -n $2 || ${_so_nav_empty[$3]} == all ) ]] || return 0
-    (( ${+_so_start[$3]} && $+functions[token_completion_scope] &&
-       $+functions[token_completion_directory] )) || return 0
+    (( ${+_so_start[$3]} && $+functions[token_completion_from] )) || return 0
     local _so_directory
     _so_navigation_root "$3"
-    token_completion_scope
-    token_completion_directory "$2" "$_so_directory"
+    token_completion_from directory "$2" "$_so_directory"
     return
   fi
   local mode=$1 fragment=$2 cmd=$3 selector=$4 form=$5
