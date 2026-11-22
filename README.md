@@ -216,7 +216,7 @@ commands:
 With sections `[work-read-dev]` and `[work-read-stage]`, type
 `aws s3 ls --profile=$wo` or `aws s3 ls --profile $wo` and press **Tab**.
 The picker shows the two section names. Choose the staging profile, and the
-editable line contains a quoted `shell-overrides lookup` expression. AWS
+editable line contains token-completion’s quoted file lookup expression. AWS
 receives one explicit profile value, `work-read-stage`. Credential option
 names and values never appear as candidates, and the generated lookup can
 only return a section name. Omitting `--profile` still supplies the default.
@@ -398,17 +398,18 @@ keys. Supported mapping keys are nonempty strings without NUL; scalar strings
 preserve whitespace, including trailing newlines. Booleans and null use JSON
 spelling, and date/time scalars use ISO format.
 
-INI uses case-preserving option names and disables interpolation. JSON and
-INI use Python's standard library; YAML uses PyYAML's safe loader. TOML uses
-`tomllib` on Python 3.11+; source installs on Python 3.9–3.10 need `tomli`
-in the plugin interpreter for TOML sources. The Nix package supplies the parser.
+Shell-overrides selects the source declaration for the current command, rule
+and option. Token-completion reads that file, presents candidates and inserts
+its deferred lookup. When the line executes, token-completion asks the loaded
+shell-overrides provider whether the command, option, format, selection policy
+and file still match a current declaration. Removing the declaration and
+running `shell-overrides reload` revokes it, including for saved history
+entries. An invalid manifest edit retains the last valid declaration.
 
-The generated lookup records the command, option, format, selection policy,
-file and exact key path. It checks the current manifest declaration before
-reading the source. A removed declaration, missing key or unreadable document
-produces a diagnostic and an empty argument on replay. A present empty string
-succeeds quietly. Parser diagnostics omit source lines, and the picker shows
-paths and provenance only.
+A missing key, unavailable source or revoked declaration produces a diagnostic
+and an empty argument. A present empty string succeeds quietly. See the
+[token-completion file provider reference](https://github.com/randallwick/token-completion)
+for parser dependencies, supported documents and standalone use.
 
 ## Shell settings
 
@@ -458,5 +459,5 @@ to exercise plugin changes from a fresh startup. The regression suite runs from
 the checkout using a Python interpreter that can import PyYAML:
 
 ```sh
-python3 tests/test_plugin.py -v
+python3 -m unittest discover -s tests -v
 ```

@@ -219,42 +219,34 @@ token_provider_shell_overrides_context() {
   emulate -L zsh
   local fragment=$1 cmd=$2 opt=$3 form=$4
   shift 4
-  (( ${+_so_start[$cmd]} && $#_so_sources )) || return 0
+  (( ${+functions[token_completion_scope]} && ${+functions[token_completion_file]} && ${+_so_start[$cmd]} && $#_so_sources )) || return 0
   local _so_rule=-1 _so_option_position=0
-  local -a _so_argv identity
+  local -a _so_argv
   _so_prepare_argv "$cmd" "$@"
   (( _so_option_position )) || return 0
   local -i i
-  local fmt policy file kind display node insertion
   for ((i=1; i<=$#_so_sources; i+=7)); do
     [[ ${_so_sources[i]} == "$cmd" && ${_so_sources[i+1]} == "$_so_rule" &&
        ${_so_sources[i+2]} == "$opt" && " ${_so_sources[i+3]} " == *" $form "* ]] || continue
     token_completion_scope
-    fmt=${_so_sources[i+4]} policy=${_so_sources[i+5]} file=${_so_sources[i+6]}
-    identity=("$cmd" "$opt" "$fmt" "$policy" "$file")
-    while IFS= read -r -d '' kind && IFS= read -r -d '' display && IFS= read -r -d '' node; do
-      if [[ $kind == branch ]]; then
-        insertion='$'${node}
-      else
-        insertion='"${$(shell-overrides lookup '"${(j: :)${(@q)identity}} ${(q)node}"' && builtin print -rn -- .)%.}"'
-      fi
-      token_completion_offer "$display" "$file" "$insertion"
-    done < <(command "${SHELL_OVERRIDES_PYTHON:-python3}" "$_so_root/file_source.py" list "$fmt" "$policy" "$file" "$fragment")
+    token_completion_file "$fragment" "${_so_sources[i+4]}" "${_so_sources[i+5]}" "${_so_sources[i+6]}" \
+      token_provider_shell_overrides_authorize "$cmd" "$opt"
   done
 }
 
-_so_lookup() {
+# Called by token-completion before it reads the file. Match the same policy
+# identity used to offer candidates even if the manifest was reloaded.
+token_provider_shell_overrides_authorize() {
   emulate -L zsh
+  (( $# == 5 )) || return 1
   local -i i
   for ((i=1; i<=$#_so_sources; i+=7)); do
     if [[ ${_so_sources[i]} == "$1" && ${_so_sources[i+2]} == "$2" &&
           ${_so_sources[i+4]} == "$3" && ${_so_sources[i+5]} == "$4" &&
           ${_so_sources[i+6]} == "$5" ]]; then
-      command "${SHELL_OVERRIDES_PYTHON:-python3}" "$_so_root/file_source.py" get "$3" "$4" "$5" "$6"
-      return $?
+      return 0
     fi
   done
-  print -ru2 -- 'shell-overrides: lookup source is no longer declared'
   return 1
 }
 
@@ -262,7 +254,6 @@ shell-overrides() {
   emulate -L zsh
   case "$1:$#" in
     reload:1) _so_reload ;;
-    lookup:7) shift; _so_lookup "$@" ;;
     --help:1|-h:1|help:1|:0)
       local title='shell-overrides'
       if [[ -t 1 && $TERM != dumb && -z ${NO_COLOR+x} ]]; then
