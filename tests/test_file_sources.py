@@ -31,7 +31,7 @@ commands:
       exclude: [{names: [--skip]}]
       completions:
         - option: --profile
-          source: {file: '~/accounts.ini', format: ini, select: section-names}
+          source: {file: '~/accounts', select: section-names}
         - option: --value
           forms: [equals]
           source: {file: ./settings.json, format: json, select: leaf-values}
@@ -39,7 +39,7 @@ commands:
           forms: [equals]
           source: {file: ./other.yaml, format: yaml, select: leaf-values}
 """)
-        (self.home / "accounts.ini").write_text("[work-read]\nsecret = NEVER_DISPLAY\n")
+        (self.home / "accounts").write_text("[work-read]\nsecret = NEVER_DISPLAY\n")
         (self.home / "other.yaml").write_text("region: west")
         (self.home / "settings.json").write_text('{"region":"east"}')
 
@@ -54,8 +54,11 @@ token_completion_scope() { claimed=1; }
 token_completion_file() {
   # Mirror the public helper/guard calling convention, without loading a
   # parser or reading the source document in this plugin's test suite.
-  [[ $claimed == 1 && $# == 7 ]] || exit 91
-  "$5" "$6" "$7" "$2" "$3" "$4" || exit 92
+  [[ $claimed == 1 && $# == 8 && $2 == "$8" ]] || exit 91
+  local resolved=$2
+  # Our fixture decoder selects INI for the extensionless accounts source.
+  [[ $resolved == auto ]] && resolved=ini
+  "$5" "$6" "$7" "$8" "$resolved" "$3" "$4" || exit 92
   printf '%s\\0' "$@"
   claimed=0
 }
@@ -76,7 +79,7 @@ token_completion_file() {
             self.fields(
                 self.shell("token_provider_shell_overrides_context wo probe --profile separate read")
             ),
-            ["wo", "ini", "section-names", "~/accounts.ini", GUARD, "probe", "--profile"],
+            ["wo", "auto", "section-names", "~/accounts", GUARD, "probe", "--profile", "auto"],
         )
         for context in [
             "wo other --profile equals read",
@@ -98,6 +101,7 @@ token_completion_file() {
                 GUARD,
                 "probe",
                 "--value",
+                "json",
                 "re",
                 "yaml",
                 "leaf-values",
@@ -105,6 +109,7 @@ token_completion_file() {
                 GUARD,
                 "probe",
                 "--value",
+                "yaml",
             ],
         )
 
@@ -126,16 +131,56 @@ token_completion_file() {
                 # A completed option/value pair leaves the next word eligible.
                 # A flag-shaped value, itself known as a flag, remains a value.
                 for prefix in ("--label name", "--label --profile", "--profile --label"):
-                    self.assertEqual(self.fields(self.shell(probe + " " + prefix))[::7], ["wo"])
+                    self.assertEqual(self.fields(self.shell(probe + " " + prefix))[::8], ["wo"])
+
+    def test_format_mode_change_revokes_both_new_and_legacy_history(self):
+        # Both records would use the same concrete parser. A manifest edit
+        # still changes which policy the saved command requested.
+        auto = f"{GUARD} probe --profile auto ini section-names '~/accounts'"
+        explicit = auto.replace(" auto ini ", " ini ini ")
+        legacy = auto.replace(" auto ini ", " ini ")
+        self.manifest.with_suffix(".next").write_text(
+            self.manifest.read_text().replace("file: '~/accounts'", "file: '~/accounts', format: ini")
+        )
+        run = self.shell(f"""
+{auto} || exit 93
+{explicit} && exit 94
+{legacy} && exit 95
+mv "$SHELL_OVERRIDES_MANIFEST_DIR/cli.yaml" "$SHELL_OVERRIDES_MANIFEST_DIR/cli.prev"
+mv "$SHELL_OVERRIDES_MANIFEST_DIR/cli.next" "$SHELL_OVERRIDES_MANIFEST_DIR/cli.yaml"
+shell-overrides reload
+{auto} && exit 96
+{explicit} || exit 97
+{legacy} || exit 98
+mv "$SHELL_OVERRIDES_MANIFEST_DIR/cli.prev" "$SHELL_OVERRIDES_MANIFEST_DIR/cli.yaml"
+shell-overrides reload
+{legacy} && exit 99
+{explicit} && exit 100
+{auto}
+""")
+        self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_rejects_unsupported_format_and_policy_pairs(self):
+        original = self.manifest.read_text()
+        for field in ("format: go", "format: yaml", "format: null"):
+            with self.subTest(field):
+                self.manifest.write_text(
+                    original.replace("file: '~/accounts'", f"file: '~/accounts', {field}")
+                )
+                run = self.shell("token_provider_shell_overrides_context wo probe --profile separate read")
+                self.assertEqual(self.fields(run), [])
+                self.assertIn(b"cli.yaml", run.stderr)
 
     def test_authorization_follows_live_manifest(self):
-        allowed = f"{GUARD} probe --profile ini section-names '~/accounts.ini'"
+        allowed = f"{GUARD} probe --profile auto ini section-names '~/accounts'"
         for request in [
             allowed.replace("section-names", "leaf-values"),
             allowed.replace("probe", "other"),
             allowed.replace("--profile", "--account"),
             allowed.replace(" ini ", " toml "),
-            allowed.replace("accounts.ini", "other.ini"),
+            allowed.replace(" auto ini ", " ini ini "),
+            allowed.replace(" auto ini ", " auto plugin "),
+            allowed.replace("accounts", "other.ini"),
             allowed + " extra",
         ]:
             with self.subTest(request):

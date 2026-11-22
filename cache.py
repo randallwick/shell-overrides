@@ -61,9 +61,10 @@ def completion(spec):
     require(forms and set(forms) <= {"separate", "equals"}, "unknown completion form")
     src = spec["source"]
     fields(src, ["format", "file", "select"])
-    fmt, file, select = (string(src[key]) for key in ("format", "file", "select"))
-    require(fmt in {"ini", "toml", "json", "yaml"} and file, "expected a format and file")
-    require(select in {"keys", "leaf-values"} or (fmt == "ini" and select == "section-names"),
+    fmt = string(src.get("format", "auto"))
+    file, select = string(src["file"]), string(src["select"])
+    require(fmt in {"auto", "ini", "toml", "json", "yaml"} and file, "expected a format and file")
+    require(select in {"keys", "leaf-values"} or (fmt in {"auto", "ini"} and select == "section-names"),
             "expected keys, leaf-values, or INI section-names")
     return [flag, " ".join(forms), fmt, select, file]
 
@@ -195,7 +196,7 @@ def remove_conflicts(files, previous, config, diagnostics):
 def snapshot(config, sources, records):
     # Byte lengths let UTF-16 sources contain arbitrary NULs. Rule records
     # have a separate, NUL-free string contract suitable for zsh argv.
-    parts = [b"SO/3\0", os.fsencode(config), b"\0"]
+    parts = [b"SO/4\0", os.fsencode(config), b"\0"]
     for name, raw in sources:
         parts.extend([os.fsencode(name), b"\0", str(len(raw)).encode(), b"\0", raw])
     # POSIX cksum is available in source installs on macOS and Linux.

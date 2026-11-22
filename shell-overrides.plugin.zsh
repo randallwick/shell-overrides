@@ -110,7 +110,7 @@ _so_warm_records() {
 
   # Under the C locale, lengths and slices count bytes. A length-framed
   # manifest can include BOMs, NULs, and trailing newlines.
-  prefix="SO/3${nul}${config}${nul}"
+  prefix="SO/4${nul}${config}${nul}"
   for file in "$config"/*.y(a|)ml(N-.); do
     [[ -r $file ]] || return 1
     raw=${mapfile[$file]}
@@ -230,7 +230,7 @@ token_provider_shell_overrides_context() {
        ${_so_sources[i+2]} == "$opt" && " ${_so_sources[i+3]} " == *" $form "* ]] || continue
     token_completion_scope
     token_completion_file "$fragment" "${_so_sources[i+4]}" "${_so_sources[i+5]}" "${_so_sources[i+6]}" \
-      token_provider_shell_overrides_authorize "$cmd" "$opt"
+      token_provider_shell_overrides_authorize "$cmd" "$opt" "${_so_sources[i+4]}"
   done
 }
 
@@ -238,12 +238,21 @@ token_provider_shell_overrides_context() {
 # identity used to offer candidates even if the manifest was reloaded.
 token_provider_shell_overrides_authorize() {
   emulate -L zsh
-  (( $# == 5 )) || return 1
+  # Pre-inference history carried only the explicit format. Normalize it to
+  # the new (declared, resolved) pair without permitting an auto declaration.
+  if (( $# == 5 )); then
+    set -- "$1" "$2" "$3" "$3" "$4" "$5"
+  fi
+  (( $# == 6 )) || return 1
+  local cmd=$1 opt=$2 declared=$3 resolved=$4 policy=$5 file=$6
+  [[ $resolved == (ini|toml|json|yaml) ]] || return 1
+  [[ $declared == auto || $declared == "$resolved" ]] || return 1
+  [[ $policy != section-names || $resolved == ini ]] || return 1
   local -i i
   for ((i=1; i<=$#_so_sources; i+=7)); do
-    if [[ ${_so_sources[i]} == "$1" && ${_so_sources[i+2]} == "$2" &&
-          ${_so_sources[i+4]} == "$3" && ${_so_sources[i+5]} == "$4" &&
-          ${_so_sources[i+6]} == "$5" ]]; then
+    if [[ ${_so_sources[i]} == "$cmd" && ${_so_sources[i+2]} == "$opt" &&
+          ${_so_sources[i+4]} == "$declared" && ${_so_sources[i+5]} == "$policy" &&
+          ${_so_sources[i+6]} == "$file" ]]; then
       return 0
     fi
   done

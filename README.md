@@ -192,8 +192,8 @@ they do not create shell variables or configure credentials.
 As an alternative to maintaining the static profile tokens above, replace the
 AWS rule with this one. Save it in your manifest directory and run
 `shell-overrides reload`. Load [token-completion](https://github.com/randallwick/token-completion)
-with contextual provider support; if you select providers explicitly, include
-`shell_overrides`.
+with format inference support. For an explicit provider list, include both
+`shell_overrides` and `ini`, for example `TOKEN_COMPLETION_PROVIDERS=(shell dotenv shell_overrides ini)`.
 
 ```yaml
 version: 1
@@ -208,7 +208,6 @@ commands:
         - option: --profile
           forms: [equals, separate]
           source:
-            format: ini
             file: ~/.aws/credentials
             select: section-names
 ```
@@ -374,9 +373,9 @@ Every entry below belongs under `commands.<name>[].completions[]`.
 | --- | --- | --- |
 | `option` | Required flag name | The exact option spelling. Add another entry for an alias. |
 | `forms` | List, defaults to `[separate, equals]` | Enable `--option $fragment`, `--option=$fragment`, or both. |
-| `source.format` | Required string | `ini`, `toml`, `json` or `yaml`. |
+| `source.format` | Optional string, defaults to `auto` | Token-completion infers the format from enabled file providers. Set `ini`, `toml`, `json` or `yaml` to select a specific enabled provider. |
 | `source.file` | Required path string | Absolute paths and leading `~` are supported. Relative paths resolve from the working directory at completion and execution. |
-| `source.select` | Required string | `section-names` (INI only) and `keys` return existing top-level names. `leaf-values` walks the document and returns the selected scalar. |
+| `source.select` | Required string | `section-names` (inferred or explicit INI) and `keys` return existing top-level names. `leaf-values` walks the document and returns the selected scalar. |
 
 Scope is determined by the command segment containing the cursor, its arguments
 before the active option, and the first eligible manifest rule. The active
@@ -402,7 +401,11 @@ Shell-overrides selects the source declaration for the current command, rule
 and option. Token-completion reads that file, presents candidates and inserts
 its deferred lookup. When the line executes, token-completion asks the loaded
 shell-overrides provider whether the command, option, format, selection policy
-and file still match a current declaration. Removing the declaration and
+and file still match a current declaration. History records both the declared
+mode and the parser actually selected. Switching from inferred to explicit
+format or vice versa requires completing the argument again. A scoped source
+requires its format provider to be enabled in token-completion, including
+when `source.format` explicitly names it. Removing the declaration and
 running `shell-overrides reload` revokes it, including for saved history
 entries. An invalid manifest edit retains the last valid declaration.
 
