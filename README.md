@@ -1,0 +1,311 @@
+# shell-overrides
+
+Give a command better defaults in interactive zsh. Put rules in a YAML file;
+the wrapper fills in missing arguments and runs the original executable. All
+the usual shell features still work, including pipes, redirects and exit codes.
+
+## First rule in a minute
+
+After [installing the plugin](#installation), give bare `uname` a more useful
+default: print the kernel name and release together.
+
+```zsh
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/shell-overrides"
+cat > "${XDG_CONFIG_HOME:-$HOME/.config}/shell-overrides/kernel.yaml" <<'YAML'
+version: 1
+commands:
+  uname:
+    - exact: []
+      defaults:
+        - append: [-sr]
+YAML
+shell-overrides reload
+uname       # runs uname -sr
+uname -m    # prints the machine architecture, as usual
+```
+
+`exact` compares the complete argument list. An empty argument is still an
+argument. A rule with `exact: []` handles a bare command. To undo the example,
+delete `kernel.yaml` and run `shell-overrides reload`.
+
+## Installation
+
+Source installs require zsh, POSIX `cksum`, and Python 3.9+ with PyYAML.
+Check with `python3 -c 'import yaml'`. If the Python on your PATH changes
+across projects, create a dedicated environment once:
+
+```zsh
+python3 -m venv "${XDG_DATA_HOME:-$HOME/.local/share}/shell-overrides/venv"
+"${XDG_DATA_HOME:-$HOME/.local/share}/shell-overrides/venv/bin/python" -m pip install PyYAML
+```
+
+Set `SHELL_OVERRIDES_PYTHON=${XDG_DATA_HOME:-$HOME/.local/share}/shell-overrides/venv/bin/python`
+in `.zshrc` before the plugin loads. Editing a manifest while a project venv is
+active will still use the dedicated environment. The Nix package supplies its
+own interpreter, PyYAML and checksum utility.
+
+### Manual
+
+```zsh
+plugins=${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins
+mkdir -p "$plugins"
+git clone --branch stable https://github.com/randallwick/shell-overrides.git "$plugins/shell-overrides"
+```
+
+Source this file in `.zshrc`:
+
+```zsh
+source "${XDG_DATA_HOME:-$HOME/.local/share}/zsh/plugins/shell-overrides/shell-overrides.plugin.zsh"
+```
+
+### Antidote
+
+Add the following entry to `${ZDOTDIR:-$HOME}/.zsh_plugins.txt` in your existing
+Antidote setup. Run `antidote load` or start a fresh shell. [Antidote options](https://antidote.sh/options)
+
+```text
+randallwick/shell-overrides branch:stable
+```
+
+### Oh My Zsh
+
+Clone into Oh My Zsh's custom plugins directory:
+
+```zsh
+git clone --branch stable https://github.com/randallwick/shell-overrides.git \
+  "${ZSH_CUSTOM:-$ZSH/custom}/plugins/shell-overrides"
+```
+
+In `.zshrc`, add `plugins+=(shell-overrides)` after your `plugins=(...)`
+declaration and before sourcing `oh-my-zsh.sh`. Open a new shell.
+[Oh My Zsh custom plugins](https://github.com/ohmyzsh/ohmyzsh/wiki/Customization#adding-a-new-plugin)
+
+### NixOS and Home Manager
+
+Declare the source input in your flake:
+
+```nix
+inputs.shell-overrides = {
+  url = "github:randallwick/shell-overrides/stable";
+  flake = false;
+};
+```
+
+Use your existing package set. For a Home Manager module receiving `inputs`
+through `extraSpecialArgs`:
+
+```nix
+{ inputs, pkgs, ... }:
+let
+  plugin = pkgs.callPackage (inputs.shell-overrides + "/package.nix") {};
+in {
+  programs.zsh.enable = true;
+  programs.zsh.initContent = ''
+    source ${plugin}/share/shell-overrides/shell-overrides.plugin.zsh
+  '';
+}
+```
+
+In a NixOS module receiving `inputs` through `specialArgs`, use the same
+`plugin` expression and put that source line in
+`programs.zsh.interactiveShellInit`. After applying your configuration, open a
+new shell and verify with `shell-overrides --help`. The same verification works
+with any installation method.
+
+### Updates
+
+| Install | Update the plugin |
+| --- | --- |
+| Manual branch checkout | Run `git pull --ff-only` in the plugin directory. |
+| Antidote | Run `antidote update`. |
+| Oh My Zsh | Run `git -C "${ZSH_CUSTOM:-$ZSH/custom}/plugins/shell-overrides" pull --ff-only`. |
+| Nix | Run `nix flake update shell-overrides` in the consuming flake, review the changed lock, then apply it through your normal configuration workflow. |
+
+Open a new shell after updating. Follow `stable` for released code or
+`development` for ongoing work. To stay on one release, select an immutable tag
+such as `v0.1.0` at clone time or in the Nix input
+URL. A Nix lock records the exact revision even when the URL selects a branch.
+
+## Recipes
+
+### Defaults on a subcommand
+
+This manifest makes regular directory listings include hidden entries.
+Explicit `-a` wins. The command receives one copy of the flag in either case.
+
+```yaml
+version: 1
+commands:
+  ls:
+    - prefix: []
+      defaults:
+        - append: [-a]
+          names: [-a]
+```
+
+```zsh
+ls ./src       # argv: ./src -a
+ls -a ./src    # argv: -a ./src
+ls -- -a       # argv: -a -- -a   (the second -a is a filename)
+```
+
+A shell alias or function named `ls` already owns that name. In that case,
+try this recipe in a fresh `zsh -f` session with the plugin sourced manually.
+
+### Explicit option values
+
+A tool accepts both `--format` and `-f`. Apply a default only for `report list`
+and only when all declared spellings are absent.
+
+```yaml
+version: 1
+commands:
+  report:
+    - prefix: [list]
+      defaults:
+        - append: [--format, table]
+          names: [--format, -f]
+          forms: [separate, equals, attached]
+```
+
+```zsh
+report list                   # argv: list --format table
+report list -fjson            # argv: list -fjson
+report list --format=false    # argv: list --format=false
+report list --format ''       # argv: list --format <empty string>
+```
+
+### Exclude a rule and fall through
+
+For an `inspect` subcommand, select a human-readable layout unless the caller
+requests machine output. The next eligible rule may still supply other defaults.
+
+```yaml
+version: 1
+commands:
+  report:
+    - prefix: [inspect]
+      exclude:
+        - names: [--json]
+      defaults:
+        - append: [--pretty]
+    - prefix: [inspect]
+      defaults:
+        - append: [--quiet]
+```
+
+```zsh
+report inspect item           # argv: inspect item --pretty
+report inspect --json item    # argv: inspect --json item --quiet
+```
+
+### Offer a literal to token completion
+
+```yaml
+version: 1
+tokens:
+  REGION: us-east-2
+  GREETING: 'hello $USER'
+```
+
+With [token-completion](https://github.com/randallwick/token-completion)
+loaded, type `printf '%s\n' $GREET` and press Tab. Accepting the manifest
+candidate inserts a shell-quoted literal. Running the line prints
+`hello $USER`. If a shell variable also supplies that name, the picker offers
+both and labels the manifest candidate with its filename. An explicit
+`TOKEN_COMPLETION_PROVIDERS` array should include `shell_overrides` to enable
+the provider. Either plugin may load first. The provider reads the active rule
+inventory, so manifest edits reach completion on refresh as well.
+
+## Manifest reference
+
+The default directory is `${XDG_CONFIG_HOME:-$HOME/.config}/shell-overrides/`.
+Write one or more top-level, nonhidden `.yaml` or `.yml` files. Symlinks to
+regular files work. The loader accepts UTF-8 (with or without a BOM) and
+UTF-16 with a byte-order mark.
+
+| Location | Type | Semantics |
+| --- | --- | --- |
+| `version` | Integer, required | Set to `1`. |
+| `commands` | Mapping, optional | Maps each executable name to its ordered, nonempty list of rules. Omitted means no commands. |
+| `commands.<name>[].exact` | String array | Match every argument, including the count. |
+| `commands.<name>[].prefix` | String array | Match the initial arguments. An empty list matches every invocation. Each rule requires exactly one of `exact` and `prefix`. |
+| `commands.<name>[].exclude` | Option-group array, optional | A recognized option in any group disqualifies the rule. Defaults to an empty list. |
+| `commands.<name>[].defaults` | Option-group array, required | Each group supplies its missing arguments, in list order. At least one group is required. |
+| `defaults[].append` | String array, required | One or more literal arguments to add. Defaults are inserted immediately before the first option boundary `--`, or appended at the end. |
+| `defaults[].names` | Flag-name array, optional | Spellings that suppress this group. Defaults to the first `append` argument. Set `names` explicitly if `append` starts with an option containing a value, such as `--color=auto`. |
+| `exclude[].names` | Flag-name array, required | Spellings that disqualify the rule. |
+| `defaults[].forms`, `exclude[].forms` | String array, optional | Recognized forms in the table below. Defaults to `[bare]`. |
+| `tokens` | Mapping of identifiers to strings, optional | Shell-quoted literals offered through the optional provider. Omitted means no tokens. |
+
+Each command name starts with an ASCII letter or digit and continues with
+letters, digits, `_`, `.`, `+` or `-`. Option names start with one or two hyphens
+followed by a letter or digit and may continue with letters, digits, `_` or
+`-`. Token names use ASCII shell identifiers. Quote YAML scalars such as
+`"false"`, `"yes"` and `"1"` when they represent arguments or token values.
+Unknown fields, repeated mapping keys and embedded NULs in shell strings are
+invalid.
+
+| Form | Example | Consumes |
+| --- | --- | --- |
+| `bare` | `--quiet` | Exact flag. |
+| `equals` | `--format=json` | One argument, including an explicitly empty value in `--format=`. |
+| `separate` | `--format json`, `-f ''` | Flag and following argument. The first `--` always ends option scanning. |
+| `attached` | `-fjson` | Short one-letter option immediately followed by its value. |
+
+The wrapper checks rules in manifest order and applies only the first eligible
+rule. Flag scanning stops at `--`. A declared separate value belongs to its
+option even if the value begins with a hyphen. Declare the forms your command
+actually accepts. zsh continues to handle redirection, pipelines, quoting and
+control flow.
+
+## Shell settings
+
+Set location and interpreter variables before sourcing. Changes to these settings
+are picked up by the next `shell-overrides reload`.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `SHELL_OVERRIDES_CONFIG_DIR` | `${XDG_CONFIG_HOME:-$HOME/.config}/shell-overrides` | Plugin configuration root. |
+| `SHELL_OVERRIDES_MANIFEST_DIR` | Effective config root | Directory to scan, useful for a disposable project or test shell. |
+| `SHELL_OVERRIDES_PYTHON` | `python3` in source installs, packaged interpreter under Nix | PyYAML-capable interpreter for cache misses and edits. |
+| `SHELL_OVERRIDE` | Enabled | Set to `0` or `false` to bypass defaults. Prefix a single invocation or set it for a shell session. |
+| `XDG_CACHE_HOME` | `$HOME/.cache` | Holds private validated state under `shell-overrides/`, isolated by manifest directory. |
+| `NO_COLOR` | Unset | Disable color in terminal help. Piped output is plain. |
+
+## Refresh and recovery
+
+New shells discover additions, edits and removals. Run `shell-overrides reload`
+to do the same in the current shell. A warm start compares filenames and raw
+source bytes, then checks the compiled record checksum. A cold start compiles
+the YAML under a writer lock and publishes the cache atomically. Wrapped
+invocations work entirely in zsh.
+
+A malformed edit produces a file-specific diagnostic and preserves its last
+valid definitions. A malformed new file contributes nothing. Removing a file
+revokes its rules even when another file contains an error. Define a command
+in one file only. If definitions compete, an existing owner has precedence;
+with two new files the first in bytewise filename order wins. The rejected
+file keeps its previous valid rules when available. A pre-existing alias,
+function, reserved word or builtin retains ownership of its name.
+
+## Develop from a checkout
+
+```zsh
+checkout=$PWD
+scratch=$(mktemp -d)
+mkdir -p "$scratch/manifests"
+SHELL_OVERRIDES_MANIFEST_DIR="$scratch/manifests" XDG_CACHE_HOME="$scratch/cache" \
+  PLUGIN="$checkout/shell-overrides.plugin.zsh" zsh -f
+# In the disposable shell:
+source "$PLUGIN"
+shell-overrides --help
+```
+
+Edit a manifest and run `shell-overrides reload`. Open another disposable shell
+to exercise plugin changes from a fresh startup. The regression suite runs from
+the checkout using a Python interpreter that can import PyYAML:
+
+```sh
+python3 tests/test_plugin.py -v
+```
