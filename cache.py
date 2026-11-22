@@ -123,6 +123,7 @@ def compile_yaml(raw):
             require(root, "navigate.root must be a nonempty path")
             env = string(nav["env"]) if "env" in nav else ""
             require("env" not in nav or re.fullmatch(NAME, env), "navigate.env must be a shell identifier")
+            require(not env.startswith(("_so_", "_tc_")), "navigate.env uses a reserved plugin parameter")
             commands[name] = [0]
             navigations[name] = [root, env, markerless(nav)]
             continue

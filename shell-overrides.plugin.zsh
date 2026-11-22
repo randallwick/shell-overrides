@@ -224,7 +224,7 @@ _so_navigate() {
   else
     IFS= read -r -d '' target < <(
       for entry in "$_so_directory"/*(N-/); do print -rN -- "${entry:t}"; done |
-        command fzf --read0 --print0 --filter "$query" --ignore-case
+        FZF_DEFAULT_OPTS= FZF_DEFAULT_OPTS_FILE= command fzf --read0 --print0 --filter "$query" --ignore-case
     )
   fi
   if [[ -z $target || $target == (.|..|*/*) || ! -d "$_so_directory/$target" ]]; then
@@ -269,22 +269,24 @@ token_provider_shell_overrides_context() {
 token_provider_shell_overrides_argument_context() {
   emulate -L zsh
   (( $# >= 5 )) || return 0
+  # Resolve a navigation root before file-source locals such as "cmd" can
+  # shadow a manifest-selected shell parameter of the same name.
+  if [[ -n $3 ]] && (( ${+_so_nav_root[$3]} )); then
+    [[ $1 == literal && $5 == positional && -z $4 && $# == 5 &&
+       ${_so_nav_empty[$3]} != off &&
+       ( -n $2 || ${_so_nav_empty[$3]} == all ) ]] || return 0
+    (( ${+_so_start[$3]} && $+functions[token_completion_scope] &&
+       $+functions[token_completion_directory] )) || return 0
+    local _so_directory
+    _so_navigation_root "$3"
+    token_completion_scope
+    token_completion_directory "$2" "$_so_directory"
+    return
+  fi
   local mode=$1 fragment=$2 cmd=$3 selector=$4 form=$5
   shift 5
   [[ -n $cmd && $mode == (literal|token) ]] || return 0
-  (( ${+functions[token_completion_scope]} && ${+_so_start[$cmd]} )) || return 0
-  if (( ${+_so_nav_root[$cmd]} )); then
-    [[ $mode == literal && $form == positional && -z $selector && $# == 0 &&
-       ${_so_nav_empty[$cmd]} != off &&
-       ( -n $fragment || ${_so_nav_empty[$cmd]} == all ) ]] || return 0
-    (( $+functions[token_completion_directory] )) || return 0
-    local _so_directory
-    _so_navigation_root "$cmd"
-    token_completion_scope
-    token_completion_directory "$fragment" "$_so_directory"
-    return
-  fi
-  (( $#_so_sources )) || return 0
+  (( ${+functions[token_completion_scope]} && ${+_so_start[$cmd]} && $#_so_sources )) || return 0
   local _so_rule=-1 _so_option_position=0
   local -a _so_argv
   _so_prepare_argv "$cmd" "$@"

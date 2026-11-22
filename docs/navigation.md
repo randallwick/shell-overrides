@@ -29,7 +29,8 @@ name. Press Enter at the shell prompt to change directory.
 
 `root` is a literal path. A leading `~` or `~/` expands to your home, and
 relative paths resolve from the current directory. Optional `env` names a
-shell parameter whose nonempty value overrides the root. Optional
+shell parameter whose nonempty value overrides the root. The plugins reserve
+parameter names beginning with `_so_` and `_tc_`. Optional
 `markerless.empty` selects `all` or `native` for an empty first argument.
 Omit `markerless` to leave completion to zsh. A directly typed hidden child
 can be selected by its exact name.

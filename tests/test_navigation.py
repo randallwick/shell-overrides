@@ -45,6 +45,8 @@ class Navigation(unittest.TestCase):
                 run = self.run_zsh('jump "$QUERY" && print -rn -- "$PWD"', QUERY=query)
                 self.assertEqual(run.stdout, os.fsencode(self.root / name), run.stderr)
         self.assertFalse((self.home / "bad").exists())
+        run = self.run_zsh('jump capi && print -rn -- "$PWD"', FZF_DEFAULT_OPTS="--print-query")
+        self.assertEqual(run.stdout, os.fsencode(self.root / "client api"))
         run = self.run_zsh('jump client api && print -rn -- "$PWD"')
         self.assertEqual(run.stdout, os.fsencode(self.root / "client api"))
 
@@ -62,6 +64,7 @@ class Navigation(unittest.TestCase):
         self.assertEqual(run.stdout, os.fsencode(self.root / "new"), run.stderr)
 
     def test_completion_scope_and_reload(self):
+        self.manifest.write_text(MANIFEST.replace("WORK_ROOT", "cmd"))
         run = self.run_zsh("""
 token_completion_scope() { print scope; }
 token_completion_directory() { print -r -- "$#:$1:$2"; }
@@ -73,8 +76,8 @@ query token wo jump "" positional
 rm "$SHELL_OVERRIDES_MANIFEST_DIR/nav.yaml"
 shell-overrides reload
 (( ! $+functions[jump] ))
-""")
-        self.assertEqual(run.stdout.decode().splitlines(), ["scope", f"2::{self.root}"], run.stderr)
+""", cmd=str(self.root / "override"))
+        self.assertEqual(run.stdout.decode().splitlines(), ["scope", f"2::{self.root}/override"], run.stderr)
         self.assertEqual(run.returncode, 0, run.stderr)
 
     def test_malformed_edit_preserves_command(self):
